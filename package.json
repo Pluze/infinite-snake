@@ -1,0 +1,40 @@
+{
+  "name": "infinite-snake",
+  "version": "1.1.0",
+  "description": "Wraparound Snake on a repeating torus with manual controls, autoplay, and live statistics",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
+    "check": "npm run ci",
+    "ci": "npm run typecheck && npm run test:run && npm run build",
+    "test": "vitest",
+    "test-watch": "vitest",
+    "type-watch": "tsc --noEmit --watch",
+    "start": "vite --host 127.0.0.1 --port 5174 --strictPort --open",
+    "build": "vite build",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "test:browser": "playwright test",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "snake",
+    "infinite",
+    "autoplay",
+    "game"
+  ],
+  "author": "Pluze",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.0.3",
+    "typescript": "^5.5.4",
+    "vite": "^4.4.9",
+    "vitest": "^0.34.2",
+    "@playwright/test": "^1.65.1",
+    "fake-indexeddb": "^6.2.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pluze/infinite-snake.git"
+  },
+  "homepage": "https://pluze.github.io/infinite-snake/"
+}

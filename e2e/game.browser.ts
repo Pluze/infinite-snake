@@ -1,0 +1,99 @@
+import { test, expect, Page } from '@playwright/test';
+async function menu(page:Page){await page.locator('#menu-toggle').click();await expect(page.locator('#menu')).toBeVisible();}
+async function close(page:Page){await page.keyboard.press('Escape');await expect(page.locator('#menu')).toBeHidden();}
+async function more(page:Page){if(await page.locator('#advanced').getAttribute('open')===null)await page.locator('#advanced summary').click();}
+async function step(page:Page){await more(page);await page.locator('#step').click();await page.locator('#board').focus();}
+test('left toolbar, right controls and both desktop charts stay available',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');await expect(page.locator('#loading')).toBeHidden();
+ await expect(page.locator('#growth-chart')).toBeVisible();await expect(page.locator('#efficiency-chart')).toBeVisible();await expect(page.locator('#speed')).toBeVisible();await expect(page.locator('.dpad')).toBeHidden();
+ expect((await page.locator('#control-panel').boundingBox())!.x).toBeGreaterThan(1000);await expect(page.locator('#mode-manual')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#speed')).toHaveAttribute('max','9');
+ await page.locator('#speed').fill('0');await page.locator('#board').focus();await page.keyboard.press('ArrowUp');await expect(page.locator('#play')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#board')).toHaveAttribute('data-position','5, 47');await page.keyboard.press('Space');
+ const steps=await page.locator('#board').getAttribute('data-steps');await page.waitForTimeout(1100);await expect(page.locator('#board')).toHaveAttribute('data-steps',steps!);await expect(page.locator('#save-status')).toContainText('Saved');
+ await page.reload();await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('#board')).toHaveAttribute('data-position','5, 47');expect(errors).toEqual([]);await page.screenshot({path:'test-results/manual.png'});
+});
+test('compact dropdown keeps only navigation; settings stay on the right',async({page})=>{
+ await page.addInitScript(() => { Math.random = () => 42 / 2147483647; });
+ await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await menu(page);
+ await expect(page.locator('#menu .menu-actions > *')).toHaveCount(4);expect(await page.locator('dialog[open]').count()).toBe(0);expect((await page.locator('#menu').boundingBox())!.width).toBeLessThan(220);await page.screenshot({path:'test-results/dropdown.png'});
+ await expect(page.locator('#settings-tab, #statistics-tab')).toHaveCount(0);await close(page);await expect(page.getByText('Food density')).toHaveCount(0);
+ await page.locator('#mode-auto').click();await page.locator('#risk').check();await page.locator('#speed').fill('7');await page.locator('#play').click();await expect.poll(async()=>Number((await page.locator('#score').textContent())!.replaceAll(',',''))).toBeGreaterThan(10);
+ await menu(page);await expect(page.locator('#play')).toHaveAttribute('aria-pressed','false');const steps=await page.locator('#board').getAttribute('data-steps');await page.waitForTimeout(350);await expect(page.locator('#board')).toHaveAttribute('data-steps',steps!);await expect(page.locator('#growth-chart')).toBeVisible();
+ await expect(page.locator('#save-status')).toContainText('Saved');const score=await page.locator('#score').textContent();await close(page);await page.reload();await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('#score')).toHaveText(score!);await expect(page.locator('#mode-manual')).toHaveAttribute('aria-pressed','true');
+ await more(page);await expect(page.getByLabel('Theme', {exact:true})).toHaveCount(0);for(let i=0;i<5;i++)await page.locator('#zoom-out').click();await page.waitForTimeout(600);await page.screenshot({path:'test-results/torus-overview.png'});
+});
+test('mobile has a compact playback bar, expandable controls, swipe and original chart buttons',async({browser})=>{
+ const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});const page=await context.newPage();await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('.dpad')).toBeVisible();await expect(page.locator('#growth-chart')).toBeHidden();await expect(page.locator('#speed')).toBeHidden();await expect(page.locator('#play')).toBeVisible();
+ await page.locator('#mobile-controls').click();await page.locator('#speed').fill('0');await page.locator('#mobile-controls').click();await menu(page);await page.screenshot({path:'test-results/mobile-menu.png'});await close(page);
+ const cdp=await context.newCDPSession(page);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:220,y:440}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:220,y:350}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await expect(page.locator('#board')).toHaveAttribute('data-position','5, 47');await page.locator('#play').click();
+ await page.locator('[data-dir="0"]').tap();await expect(page.locator('#play')).toHaveAttribute('aria-pressed','true');await page.locator('#play').click();await page.locator('[data-mobile="growth-chart"]').click();await expect(page.locator('#growth-chart')).toBeVisible();await page.locator('[data-mobile="efficiency-chart"]').click();await expect(page.locator('#growth-chart')).toBeHidden();await expect(page.locator('#efficiency-chart')).toBeVisible();await page.locator('[data-mobile="efficiency-chart"]').click();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'test-results/mobile.png'});await context.close();
+});
+test('high-speed coverage autoplay saves; a new game returns to manual',async({page})=>{
+ await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await page.locator('#mode-auto').click();await page.locator('#risk').check();await page.locator('#speed').fill('16');await page.locator('#play').click();
+ await page.waitForTimeout(7000);if(await page.locator('#play').getAttribute('aria-pressed')==='true')await page.locator('#play').click();const steps=Number((await page.locator('#board').getAttribute('data-steps'))!.replaceAll(',',''));expect(steps).toBeGreaterThan(100);await expect(page.locator('#status')).not.toContainText('You hit');await expect(page.locator('#save-status')).toContainText('Saved');
+ await page.screenshot({path:'test-results/autoplay-board.png'});await page.reload();await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('#board')).toHaveAttribute('data-steps',String(steps));await menu(page);await page.locator('#new-game').click();await page.locator('#restart-confirm').click();await expect(page.locator('#score')).toHaveText('0');await expect(page.locator('#mode-manual')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#growth-summary')).toHaveText('6 cells');await page.waitForTimeout(550);await page.screenshot({path:'test-results/desktop.png'});
+});
+test('risk assist and single-step control still work; recenter is contextual',async({page})=>{
+ await page.addInitScript(() => { Math.random = () => 42 / 2147483647; });
+ await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await page.locator('#speed').fill('0');await page.locator('#risk').check();await step(page);
+ for(const direction of ['ArrowDown','ArrowLeft']){await page.keyboard.press(direction);await page.keyboard.press('Space');await step(page);}
+ await page.keyboard.press('ArrowUp');await page.keyboard.press('Space');await step(page);await expect(page.locator('#status')).toContainText('Risk pause');await expect(page.locator('#board')).toHaveAttribute('data-steps','3');await page.locator('#risk').uncheck();await step(page);await expect(page.locator('#status')).toContainText('You hit');await expect(page.locator('#play')).toBeDisabled();
+ await page.mouse.move(600,350);await page.mouse.down();await page.mouse.move(800,400);await page.mouse.up();await expect(page.locator('#recenter')).toBeVisible();await page.locator('#recenter').click();await expect(page.locator('#camera-status')).toHaveText('Following');await expect(page.locator('#recenter')).toBeHidden();
+});
+test('small vertical wheel deltas zoom the board', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await more(page);
+  await page.locator('#zoom-in').click(); // Lock the starting scale for comparison.
+  const zoom = page.locator('#zoom-label');
+  const before = parseInt((await zoom.textContent())!, 10);
+  await page.mouse.move(600, 350);
+  await page.mouse.wheel(0, 5);
+  await expect.poll(async () => parseInt((await zoom.textContent())!, 10)).toBeLessThan(before);
+});
+test('custom world dimensions validate and restore correctly',async({page})=>{
+ await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await menu(page);await page.locator('#new-game').click();await expect(page.locator('#menu')).toBeHidden();await page.locator('#world-preset').selectOption('32x24');await expect(page.locator('#world-width')).toHaveValue('32');await expect(page.locator('#world-height')).toHaveValue('24');await expect(page.locator('#world-preview')).toContainText('768 cells');
+ await page.locator('#world-width').fill('0');await page.locator('#restart-confirm').click();await expect(page.locator('#restart-dialog')).toBeVisible();await expect(page.locator('#world-caption')).toContainText('64 × 48');await page.locator('#world-width').fill('20');await page.locator('#world-height').fill('12');await expect(page.locator('#world-preset')).toHaveValue('custom');await expect(page.locator('#world-preview')).toContainText('240 cells');await page.screenshot({path:'test-results/new-game.png'});
+ await page.locator('#restart-confirm').click();await expect(page.locator('#restart-dialog')).not.toBeVisible();await expect(page.locator('#world-caption')).toContainText('20 × 12');await expect(page.locator('#save-status')).toContainText('Saved');await page.reload();await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('#world-caption')).toContainText('20 × 12');await page.locator('#speed').fill('0');await page.locator('#board').focus();await page.keyboard.press('ArrowUp');await expect(page.locator('#board')).toHaveAttribute('data-position','5, 11');await page.keyboard.press('Space');
+});
+
+test('a walled board draws one period, saves its rules and stops at the wall', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await menu(page);
+  await page.locator('#new-game').click();
+  await page.locator('#world-width').fill('8');
+  await page.locator('#world-height').fill('8');
+  await page.getByLabel('Wraparound').uncheck();
+  await expect(page.locator('#world-preview')).toHaveText('64 cells · Solid walls');
+  await page.locator('#restart-confirm').click();
+  await expect(page.locator('#world-caption')).toHaveText('8 × 8 · solid walls');
+  await expect(page.locator('#save-status')).toContainText('Saved');
+  await page.reload();
+  await expect(page.locator('#loading')).toBeHidden();
+  await expect(page.locator('#world-caption')).toHaveText('8 × 8 · solid walls');
+  const board = page.locator('#board');
+  await expect.poll(() => board.evaluate((canvas: HTMLCanvasElement) =>
+    [...canvas.getContext('2d')!.getImageData(300, 400, 1, 1).data]
+  )).toEqual([8, 14, 11, 255]);
+  await board.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.locator('#status')).toContainText('You hit a wall');
+  await expect(board).toHaveAttribute('data-position', '5, 0');
+  await page.screenshot({ path: 'test-results/walled-board.png' });
+});
+
+test('custom dimensions accept both endpoints', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await menu(page);
+  await page.locator('#new-game').click();
+  await page.locator('#world-width').fill('1');
+  await page.locator('#world-height').fill('257');
+  await expect(page.locator('#world-preview')).toContainText('from 1 to 256');
+  await page.locator('#world-height').fill('256');
+  await expect(page.locator('#world-preview')).toHaveText('256 cells · Edges wrap');
+  await page.locator('#restart-confirm').click();
+  await expect(page.locator('#world-caption')).toHaveText('1 × 256 · edges wrap');
+  await expect(page.locator('#board')).toHaveAttribute('data-position', '0, 5');
+});
