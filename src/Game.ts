@@ -1,3 +1,4 @@
+export const MAX_WORLD_SIDE = 4096;
 export type Point = { x: number; y: number };
 export type Direction = 0 | 1 | 2 | 3;
 export const vectors: Point[] = [{ x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }];
@@ -13,7 +14,7 @@ export class Game {
   autoCycle?: Point[];
   food = new Map<string, Point>();
   segments = new Map<number, Point>();
-  occupied = new Set<string>();
+  occupied = new Map<string, number>();
   scores: number[] = [0];
   first = 0;
   last = 0;
@@ -27,7 +28,7 @@ export class Game {
   won = false;
   travel: Point;
   constructor(seed = Math.floor(Math.random() * 2147483647), width = 64, height = 48, readonly wraparound = true) {
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 256 || height > 256) throw Error('Invalid world size');
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > MAX_WORLD_SIDE || height > MAX_WORLD_SIDE) throw Error('Invalid world size');
     this.seed = seed; this.rng = seed || 1; this.width = width; this.height = height;
     const vertical = width === 1 && height > 1;
     this.direction = vertical ? 1 : 0;
@@ -43,7 +44,7 @@ export class Game {
     const point = add(p, d);
     return this.wraparound ? this.wrap(point) : point;
   }
-  private push(p: Point) { this.segments.set(this.last++, p); this.occupied.add(key(p)); }
+  private push(p: Point) { this.occupied.set(key(p), this.last); this.segments.set(this.last++, p); }
   get head() { return this.segments.get(this.last - 1)!; }
   get tail() { return this.segments.get(this.first)!; }
   get length() { return this.last - this.first; }

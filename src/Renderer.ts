@@ -1,4 +1,4 @@
-import { add, Direction, Game, Point, vectors } from './Game';
+import { Direction, Game, key, Point, vectors } from './Game';
 import { Plan } from './AutoPlayer';
 import { SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
@@ -69,18 +69,16 @@ export class Renderer {
     const now = performance.now(), dt = Math.min((now - this.last) / 1000, .1); this.last = now;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const blend = reduced ? 1 : 1 - Math.exp(-dt * 5);
-    const first = plan.points[0];
-    const routeStart = first?.x === game.head.x && first.y === game.head.y ? 1 : 0;
     if (this.follow && now > this.manualUntil) {
       const lead = running ? 3 : 1;
       const heading = vectors[game.direction];
       let lookX = heading.x * lead;
       let lookY = heading.y * lead;
       // Follow the upcoming bend rather than jumping the camera lead on a turn.
-      if (auto && running && !reduced && plan.directions.length > routeStart) {
+      if (auto && running && !reduced && plan.directions.length) {
         lookX = 0;
         lookY = 0;
-        for (const direction of plan.directions.slice(routeStart, routeStart + 5)) {
+        for (const direction of plan.directions.slice(0, 5)) {
           lookX += vectors[direction].x * .7;
           lookY += vectors[direction].y * .7;
         }
@@ -100,6 +98,11 @@ export class Renderer {
     const screen = (x: number, y: number) => ({ x: (x - this.x) * s + w / 2, y: (y - this.y) * s + h / 2 });
     const left = Math.floor(this.x - w / s / 2) - 1, right = Math.ceil(this.x + w / s / 2) + 1;
     const top = Math.floor(this.y - h / s / 2) - 1, bottom = Math.ceil(this.y + h / s / 2) + 1;
+    const x0 = game.wraparound ? left : Math.max(0, left);
+    const x1 = game.wraparound ? right : Math.min(game.width - 1, right);
+    const y0 = game.wraparound ? top : Math.max(0, top);
+    const y1 = game.wraparound ? bottom : Math.min(game.height - 1, bottom);
+    const visibleCells = Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1);
     const wall = screen(-.5, -.5);
     if (!game.wraparound) {
       ctx.save();
@@ -144,39 +147,78 @@ export class Renderer {
       ctx.fillStyle = '#ffe2b6'; ctx.fillRect(x - radius, y - radius, radius * .8, radius * .65);
       ctx.fillStyle = '#9cc880'; ctx.fillRect(x, y - radius - s * .12, s * .17, s * .12);
     });
-    if (overlay && plan.directions.length > routeStart) {
-      // Lift each step to adjacent display coordinates so seam routes never span the map.
-      const route: Point[] = [game.head];
-      for (const d of plan.directions.slice(routeStart)) route.push(add(route[route.length - 1], d));
-      for (let tx = game.wraparound ? Math.floor(left / game.width) - 1 : 0; tx <= (game.wraparound ? Math.ceil(right / game.width) + 1 : 0); tx++)
-        for (let ty = game.wraparound ? Math.floor(top / game.height) - 1 : 0; ty <= (game.wraparound ? Math.ceil(bottom / game.height) + 1 : 0); ty++) {
-          ctx.strokeStyle = '#b5e69b80'; ctx.lineWidth = Math.max(1, s * .07); ctx.setLineDash([s * .15, s * .2]); ctx.beginPath();
-          route.forEach((p, i) => { const sp = screen(p.x + tx * game.width, p.y + ty * game.height); if (i) ctx.lineTo(sp.x, sp.y); else ctx.moveTo(sp.x, sp.y); });
-          ctx.stroke(); ctx.setLineDash([]);
+    if (overlay && plan.directions.length) {
+      const edge = (x: number, y: number, direction: Direction) => {
+        const vector = vectors[direction];
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + vector.x * s, y + vector.y * s);
+      };
+      const path = plan.path;
+      let target = plan.points[plan.points.length - 1];
+      ctx.strokeStyle = '#b5e69b80';
+      ctx.lineWidth = Math.max(1, s * .07);
+      ctx.setLineDash([s * .15, s * .2]);
+      ctx.beginPath();
+      if (path && 'cycle' in path) {
+        const { cycle, length } = path;
+        const start = cycle.index(game.head);
+        target = cycle.point((start + length) % cycle.size);
+        if (length <= visibleCells) {
+          for (let offset = 0; offset < length; offset++) {
+            const point = cycle.point((start + offset) % cycle.size);
+            const direction = cycle.direction(point);
+            copies(point, (x, y) => edge(x, y, direction));
+          }
+        } else {
+          // Long cycle routes are indexed by cell. Visit only the viewport.
+          for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
+            if (cycle.distance(game.head, point) >= length) continue;
+            const pos = screen(x, y);
+            edge(pos.x, pos.y, cycle.direction(point));
+          }
         }
-      const target = plan.points[plan.points.length - 1];
+      } else if (path) {
+        for (let i = path.cursor; i < path.directions.length; i++) {
+          const point = i === 0 ? path.origin : path.points[i - 1];
+          copies(point, (x, y) => edge(x, y, path.directions[i]));
+        }
+        target = path.points[path.points.length - 1];
+      } else {
+        copies(game.head, (x, y) => edge(x, y, plan.directions[0]));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
       if (target && game.hasFood(target)) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
     }
-    const body = game.body();
-    for (const [index, point] of body.entries()) {
-      const previous = body[index - 1];
-      const next = body[index + 1];
-      copies(point, (x, y) => {
-        const back = previous && toward(point, previous, game.width, game.height);
-        const front = next && toward(point, next, game.width, game.height);
-        const headAxisSize = game.direction % 2 === 0 ? game.width : game.height;
-        const facing = back !== undefined && headAxisSize === 2 ? (back + 2) % 4 as Direction : game.direction;
-        const tile = back !== undefined && front !== undefined
-          ? { kind: 'body' as const, back, front }
-          : front !== undefined
-            ? { kind: 'tail' as const, facing: front }
-            : { kind: 'head' as const, facing };
-        const sprite = this.snakeSprites.get(tile, game.dead && !next);
-        // Round shared cell edges identically so fractional camera zoom leaves no gaps.
-        const x0 = Math.round(x - s / 2);
-        const y0 = Math.round(y - s / 2);
-        ctx.drawImage(sprite, x0, y0, Math.round(x + s / 2) - x0, Math.round(y + s / 2) - y0);
-      });
+    const drawSegment = (index: number, point: Point, x: number, y: number) => {
+      const previous = game.segments.get(index - 1);
+      const next = game.segments.get(index + 1);
+      const back = previous && toward(point, previous, game.width, game.height);
+      const front = next && toward(point, next, game.width, game.height);
+      const headAxisSize = game.direction % 2 === 0 ? game.width : game.height;
+      const facing = back !== undefined && headAxisSize === 2 ? (back + 2) % 4 as Direction : game.direction;
+      const tile = back !== undefined && front !== undefined
+        ? { kind: 'body' as const, back, front }
+        : front !== undefined
+          ? { kind: 'tail' as const, facing: front }
+          : { kind: 'head' as const, facing };
+      const sprite = this.snakeSprites.get(tile, game.dead && !next);
+      // Round shared cell edges identically so fractional camera zoom leaves no gaps.
+      const x0 = Math.round(x - s / 2);
+      const y0 = Math.round(y - s / 2);
+      ctx.drawImage(sprite, x0, y0, Math.round(x + s / 2) - x0, Math.round(y + s / 2) - y0);
+    };
+    if (game.length <= visibleCells) {
+      for (const [index, point] of game.segments) copies(point, (x, y) => drawSegment(index, point, x, y));
+    } else {
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
+        const index = game.occupied.get(key(point));
+        if (index === undefined) continue;
+        const pos = screen(x, y);
+        drawSegment(index, point, pos.x, pos.y);
+      }
     }
     if (overlay) for (let d = 0; d < 4; d++) {
       if (d === (game.direction + 2) % 4) continue;

@@ -89,11 +89,66 @@ test('custom dimensions accept both endpoints', async ({ page }) => {
   await menu(page);
   await page.locator('#new-game').click();
   await page.locator('#world-width').fill('1');
-  await page.locator('#world-height').fill('257');
-  await expect(page.locator('#world-preview')).toContainText('from 1 to 256');
-  await page.locator('#world-height').fill('256');
-  await expect(page.locator('#world-preview')).toHaveText('256 cells · Edges wrap');
+  await page.locator('#world-height').fill('4097');
+  await expect(page.locator('#world-preview')).toContainText('from 1 to 4,096');
+  await page.locator('#world-height').fill('4096');
+  await expect(page.locator('#world-preview')).toHaveText('4,096 cells · Edges wrap');
   await page.locator('#restart-confirm').click();
-  await expect(page.locator('#world-caption')).toHaveText('1 × 256 · edges wrap');
+  await expect(page.locator('#world-caption')).toHaveText('1 × 4,096 · edges wrap');
   await expect(page.locator('#board')).toHaveAttribute('data-position', '0, 5');
+});
+
+test('draws the route and highlights food past the old preview cutoff', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  const result = await page.evaluate(async () => {
+    const gameModule = '/src/Game.ts', botModule = '/src/AutoPlayer.ts';
+    const rendererModule = '/src/Renderer.ts', cycleModule = '/src/GridCycle.ts';
+    const { Game, key }: typeof import('../src/Game') = await import(gameModule);
+    const { AutoPlayer }: typeof import('../src/AutoPlayer') = await import(botModule);
+    const { Renderer }: typeof import('../src/Renderer') = await import(rendererModule);
+    const { GridCycle }: typeof import('../src/GridCycle') = await import(cycleModule);
+    const canvas = document.createElement('canvas');
+    const renderer = new Renderer(canvas);
+    renderer.follow = false;
+    const ctx = canvas.getContext('2d')!;
+    ctx.strokeStyle = '#b5e69b80';
+    const routeColor = ctx.strokeStyle;
+    let edges = 0, foodOutline = false;
+    const lineTo = ctx.lineTo.bind(ctx), strokeRect = ctx.strokeRect.bind(ctx);
+    ctx.lineTo = (x, y) => {
+      if (ctx.strokeStyle === routeColor) edges++;
+      lineTo(x, y);
+    };
+    ctx.strokeRect = (x, y, w, h) => {
+      if (ctx.strokeStyle === '#f7c795') foodOutline = true;
+      strokeRect(x, y, w, h);
+    };
+    const capture = (game: InstanceType<typeof Game>) => {
+      const food = game.food.values().next().value!;
+      renderer.x = food.x;
+      renderer.y = food.y;
+      const plan = new AutoPlayer().preview(game);
+      edges = 0;
+      foodOutline = false;
+      renderer.render(game, plan, true, false, true);
+      return { edges: edges > 0, foodOutline, cycle: Boolean(plan.path && 'cycle' in plan.path) };
+    };
+
+    const sparse = new Game(42, 4096, 4096, false);
+    const distant = { x: 3000, y: 3000 };
+    sparse.food = new Map([[key(distant), distant]]);
+
+    const dense = new Game(42, 256, 256, false);
+    const cycle = new GridCycle(256, 256, false);
+    const body = Array.from({ length: 60_000 }, (_, i) => cycle.point(i));
+    const food = cycle.point(65_000);
+    const restored = Game.restore({ ...dense.snapshot(), body, food: [food], travel: body[body.length - 1],
+      direction: cycle.direction(body[body.length - 2]) }, [0]);
+    return { sparse: capture(sparse), dense: capture(restored) };
+  });
+  expect(result).toEqual({
+    sparse: { edges: true, foodOutline: true, cycle: false },
+    dense: { edges: true, foodOutline: true, cycle: true },
+  });
 });

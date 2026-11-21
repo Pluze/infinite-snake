@@ -1,5 +1,5 @@
 import './style.css';
-import { Direction, Game } from './Game';
+import { Direction, Game, MAX_WORLD_SIDE } from './Game';
 import { AutoPlayer, Plan } from './AutoPlayer';
 import { Renderer } from './Renderer';
 import { Persistence } from './Persistence';
@@ -51,7 +51,7 @@ function ui() {
   checkbox('speed').max = auto ? '16' : '9'; checkbox('speed').value = String(speedPower);
   $('speed-mid').textContent = auto ? '256' : '16–32'; $('speed-max').textContent = auto ? '65,536' : '512';
   renderer.manual = !auto;
-  $('world-caption').textContent = `${game.width} × ${game.height} · ${game.wraparound ? 'edges wrap' : 'solid walls'}`;
+  $('world-caption').textContent = `${fmt(game.width)} × ${fmt(game.height)} · ${game.wraparound ? 'edges wrap' : 'solid walls'}`;
   $('play').textContent = game.won ? 'You win!' : game.dead ? 'Game over' : running ? 'Pause' : game.steps ? 'Resume' : 'Start';
   $('mode-indicator').hidden = !auto;
   $('play').setAttribute('aria-pressed', String(running));
@@ -80,10 +80,10 @@ function steer(d: Direction) {
   $('board').focus({ preventScroll: true }); ui();
 }
 function move() {
-  plan = auto ? bot.preview(game) : { directions: [], points: [], safe: true, reason: 'Manual' };
-  const d = auto ? plan.directions[0] ?? game.direction : pendingDirections[0] ?? game.direction;
-  if (checkbox('risk').checked && (!game.canMove(d) || (auto && !plan.safe))) {
-    document.body.classList.add('warning'); pause(`Risk pause: ${auto && !plan.safe ? plan.reason : game.contains(game.next(game.head, d)) ? 'your body is directly ahead' : 'a wall is directly ahead'}. Turn or disable Pause before risk to continue.`); return false;
+  const next = auto ? bot.nextMove(game) : undefined;
+  const d = next?.direction ?? (auto ? game.direction : pendingDirections[0] ?? game.direction);
+  if (checkbox('risk').checked && (!game.canMove(d) || (next && !next.safe))) {
+    document.body.classList.add('warning'); pause(`Risk pause: ${next && !next.safe ? next.reason : game.contains(game.next(game.head, d)) ? 'your body is directly ahead' : 'a wall is directly ahead'}. Turn or disable Pause before risk to continue.`); return false;
   }
   if (!auto) pendingDirections.shift();
   const moved = game.step(d);
@@ -125,7 +125,7 @@ $('help-close').onclick = () => $<HTMLDialogElement>('help-dialog').close();
 function updateWorldPreview() {
   const width = checkbox('world-width').valueAsNumber, height = checkbox('world-height').valueAsNumber;
   const valid = checkbox('world-width').validity.valid && checkbox('world-height').validity.valid;
-  $('world-preview').textContent = valid ? `${fmt(width * height)} cells · ${checkbox('world-wrap').checked ? 'Edges wrap' : 'Solid walls'}` : 'Enter whole numbers from 1 to 256 for both sides.';
+  $('world-preview').textContent = valid ? `${fmt(width * height)} cells · ${checkbox('world-wrap').checked ? 'Edges wrap' : 'Solid walls'}` : `Enter whole numbers from 1 to ${fmt(MAX_WORLD_SIDE)} for both sides.`;
 }
 $('new-game').onclick = () => {
   pause(); checkbox('world-width').value = String(game.width); checkbox('world-height').value = String(game.height);
@@ -139,7 +139,11 @@ $<HTMLSelectElement>('world-preset').onchange = () => {
   if (value !== 'custom') { const [width, height] = value.split('x'); checkbox('world-width').value = width; checkbox('world-height').value = height; }
   updateWorldPreview();
 };
-for (const id of ['world-width', 'world-height']) checkbox(id).oninput = () => { $<HTMLSelectElement>('world-preset').value = 'custom'; updateWorldPreview(); };
+for (const id of ['world-width', 'world-height']) {
+  const input = checkbox(id);
+  input.max = String(MAX_WORLD_SIDE);
+  input.oninput = () => { $<HTMLSelectElement>('world-preset').value = 'custom'; updateWorldPreview(); };
+}
 checkbox('world-wrap').onchange = updateWorldPreview;
 $('restart-cancel').onclick = () => $<HTMLDialogElement>('restart-dialog').close();
 async function reset(width = game.width, height = game.height, wraparound = game.wraparound) {
@@ -190,7 +194,14 @@ function tick() {
   if (ready && now - lastUI > 200) { if (auto) plan = bot.preview(game); ui(); lastUI = now; }
 }
 setInterval(tick, 8);
-function frame() { if (ready && !document.hidden) { renderer.render(game, plan, checkbox('overlay').checked !== heldF, running, auto); charts.render(game); } requestAnimationFrame(frame); }
+function frame() {
+  if (ready && !document.hidden) {
+    if (auto && !busy) plan = bot.preview(game);
+    renderer.render(game, plan, checkbox('overlay').checked !== heldF, running, auto);
+    charts.render(game);
+  }
+  requestAnimationFrame(frame);
+}
 requestAnimationFrame(frame);
 document.addEventListener('visibilitychange', () => { saver.markDirty(); saver.flush(); if (!document.hidden) { lastTick = performance.now(); charts.invalidate(); } });
 window.addEventListener('pagehide', () => { saver.markDirty(); saver.flush(); });

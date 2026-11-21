@@ -9,7 +9,7 @@ A classic, manually controlled Snake game on a repeating **torus**, with a **64 
 - **Arrow keys or WASD:** turn and start/resume play. The game starts in manual mode. Direct reversals are ignored.
 - **Space / Play button:** start or pause.
 - **Mobile:** swipe on the board or use the direction pad to turn and start. Pinch with two fingers to zoom. Open Controls for settings.
-- **New game dimensions:** choose Small (32 × 24), Standard (64 × 48), or Large (96 × 64), or enter a custom width and height from 1 to 256 cells each. The dialog previews total cells. Dimensions apply only to the new run and are restored with its save. Invalid input leaves the current run intact.
+- **New game dimensions:** choose Small (32 × 24), Standard (64 × 48), or Large (96 × 64), or enter a custom width and height from 1 to 4,096 cells each. The dialog previews total cells. Dimensions apply only to the new run and are restored with its save. Invalid input leaves the current run intact.
 - **Wraparound:** on by default. Turn it off in New game to play within solid walls. The renderer shows a single board, and hitting an edge ends the run. The setting is saved with the board.
 - **Food:** each item adds 10 points and one body segment. One food appears at a time. After eating, it respawns on a free cell. Hit your body to end the run; fill the entire world to win.
 - **Speed:** manual play defaults to 8 steps/s and offers 1–512 steps/s. Optional autoplay supports requests up to 65,536 steps/s and shows actual throughput separately. Switching back to manual caps speed at 512 steps/s.

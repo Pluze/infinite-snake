@@ -20,7 +20,7 @@ describe('finite torus rules', () => {
       expect(large.food.size).toBe(1);
     }
     expect(() => new Game(42, 0, 8)).toThrow();
-    expect(() => new Game(42, 8, 257)).toThrow();
+    expect(() => new Game(42, 8, 4097)).toThrow();
   });
   it('wraps in all four directions and aliases repeated coordinates', () => {
     const g = new Game(42);

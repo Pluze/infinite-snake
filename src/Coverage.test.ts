@@ -96,3 +96,35 @@ it('plays through tiny wraparound boards without trying to move onto the head', 
     expect(game.won).toBe(true);
   }
 });
+
+it('fills two-cell-wide and two-cell-high boards without getting trapped', () => {
+  for (const span of [2, 3, 9, 31, 128, 256]) {
+    for (const [width, height] of [[2, span], [span, 2]]) {
+      for (const wraparound of [true, false]) {
+        const game = new Game(42, width, height, wraparound);
+        const bot = new AutoPlayer();
+        while (!game.won && game.steps < game.capacity ** 2) {
+          const move = bot.nextMove(game);
+          if (!move.safe || !game.step(move.direction)) throw Error(`Autoplay failed on ${width}×${height}, wrap=${wraparound}`);
+          bot.advance(game);
+        }
+        expect(game.won).toBe(true);
+      }
+    }
+  }
+});
+
+it('reaches the first 100 meals quickly on a 256 by 256 board', () => {
+  // The published planner used 63,660 wrapped and 74,938 walled steps.
+  for (const wraparound of [true, false]) {
+    const game = new Game(42, 256, 256, wraparound);
+    const bot = new AutoPlayer();
+    while (game.score < 1000 && game.steps < 30_000) {
+      const move = bot.nextMove(game);
+      if (!move.safe || !game.step(move.direction)) throw Error('Autoplay lost its safe route');
+      bot.advance(game);
+    }
+    expect(game.score).toBe(1000);
+    expect(game.steps).toBeLessThan(30_000);
+  }
+});

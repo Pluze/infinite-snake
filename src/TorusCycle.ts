@@ -1,4 +1,26 @@
 import { Direction, Point, vectors } from './Game';
+export type Cycle = Pick<TorusCycle, 'size' | 'index' | 'point' | 'direction' | 'distance' | 'ordered'>;
+
+export function cycleDirection(from: Point, to: Point): Direction {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  if (dx) return dx === 1 || dx < -1 ? 0 : 2;
+  return dy === 1 || dy < -1 ? 1 : 3;
+}
+
+export function cycleOrder(cycle: Pick<Cycle, 'size' | 'distance'>, body: Iterable<Point>) {
+  let span = 0, previous: Point | undefined;
+  for (const point of body) {
+    if (previous) {
+      const advance = cycle.distance(previous, point);
+      if (!advance) return false;
+      span += advance;
+      if (span >= cycle.size) return false;
+    }
+    previous = point;
+  }
+  return true;
+}
+
 /** Join small perimeter loops into a single winding cycle across the torus. */
 export class TorusCycle {
   readonly cells: Point[] = [];
@@ -118,11 +140,13 @@ export class TorusCycle {
   }
   index(p: Point) { return this.order[p.y * this.width + p.x]; }
   distance(from: Point, to: Point) { return (this.index(to) - this.index(from) + this.cells.length) % this.cells.length; }
-  direction(p: Point): Direction {
-    const next = this.cells[(this.index(p) + 1) % this.cells.length];
-    if (next.x === (p.x + 1) % this.width && next.y === p.y) return 0;
-    if (next.x === (p.x + this.width - 1) % this.width && next.y === p.y) return 2;
-    return next.y === (p.y + 1) % this.height ? 1 : 3;
+  get size() { return this.cells.length; }
+  point(index: number) { return this.cells[index]; }
+  direction(p: Point) {
+    const next = this.point((this.index(p) + 1) % this.size);
+    if (this.wraparound && this.width === 2 && next.y === p.y) return 0;
+    if (this.wraparound && this.height === 2 && next.x === p.x) return 1;
+    return cycleDirection(p, next);
   }
   private adjacent(a: Point, b: Point) {
     const dx = Math.abs(a.x - b.x);
@@ -142,7 +166,7 @@ export class TorusCycle {
     // Swapping two pairs of neighboring edges first splits off a loop, then
     // inserts it earlier in the free arc. No part of the body arc changes.
     const swaps: [number, number][] = [];
-    for (let i = 0; i < clearance - 1; i++) {
+    for (let i = 0; i < Math.min(clearance - 1, 4096); i++) {
       const next = at(i + 1);
       for (const v of vectors) {
         let x = next.x + v.x;
@@ -188,14 +212,5 @@ export class TorusCycle {
     return true;
   }
 
-  ordered(body: Point[]) {
-    let span = 0;
-    for (let i = 1; i < body.length; i++) {
-      const advance = this.distance(body[i - 1], body[i]);
-      if (!advance) return false;
-      span += advance;
-      if (span >= this.cells.length) return false;
-    }
-    return true;
-  }
+  ordered(body: Iterable<Point>) { return cycleOrder(this, body); }
 }
