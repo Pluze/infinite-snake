@@ -46,3 +46,16 @@ With a known random seed, the minimum full-game move count corresponds to a shor
 The planner uses bounded A* with tail-release times to generate approaches with different arrival directions. It simulates escapes using the game's collision, growth, and spawning rules. At higher occupancy it can rearrange the free part of a Hamiltonian cycle while preserving body order. It also estimates the wait if the next food lands in a gap in the body arc. Bounded search can still miss shorter feasible routes. [Safe Interval Path Planning](https://publications.ri.cmu.edu/sipp-safe-interval-path-planning-for-dynamic-environments) · [Winning Snake](https://doi.org/10.1017/S1471068424000267)
 
 AlphaSnake combines a learned policy with tree search. Its experiments used 10 × 10 boards, so they do not establish real-time performance for this project's 256 × 256 boards. [AlphaSnake](https://arxiv.org/abs/2211.09622)
+
+## Smaller presets and rectangular boards
+
+The comparison below uses the preceding English-history revision, `3e75a70`, as the baseline. Use `SNAKE_BENCH_WIDTH=96 SNAKE_BENCH_HEIGHT=64 SNAKE_BENCH_FILL=0,.24,.5` with the benchmark command for the smaller preset, or set `SNAKE_BENCH_HEIGHT=128 SNAKE_BENCH_FILL=.08` for the rectangular board. Midgame fixtures on the 96 × 64 board use its previous cycle layout so both versions resume the same body. Values sum seeds 42, 91, and 999 in solid-wall mode.
+
+| Board and initial occupancy | Actual steps | Long routes |
+|---|---:|---:|
+| 96 × 64, opening | 32,667 → 20,209 | 0 → 0 |
+| 96 × 64, 24% | 21,759 → 21,390 | 11 → 9 |
+| 96 × 64, 50% | 14,387 → 14,387 | 4 → 4 |
+| 256 × 128, 8% | 50,411 → 40,359 | 19 → 16 |
+
+At 24% occupancy, the 96 × 64 wall-board runs took 10,725 → 6,156 steps for seed 42, 6,153 → 5,094 for seed 91, and 4,881 → 10,140 for seed 999. The same headless Node.js run measured a peak planning call of 7.18 → 14.65 ms across these three samples. This measurement includes runtime pauses and does not measure browser frame rate.

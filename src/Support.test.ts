@@ -1,26 +1,33 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HistorySampler } from './HistorySampler';
+import { ScoreHistory } from './ScoreHistory';
+import { sampleHistory } from './HistorySampler';
 import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
 describe('chart envelope queries', () => {
-  it('retains bucket extrema in order across appends, windows and metric changes', () => {
-    const sampler = new HistorySampler();
-    const scores = Array.from({length:2049},(_,i)=>i%97===0?1000:Math.sin(i)*50);
-    const derive=(n:number)=>n;
-    sampler.sample(scores.slice(0,500),0,'value',derive,30);
-    for(const limit of [0,1000,19]){
-      const points=sampler.sample(scores,limit,'value',derive,30);
-      const start=limit?Math.max(0,scores.length-limit-1):0, width=Math.ceil((scores.length-start)/30);
-      expect(points[0].step).toBe(start);expect(points.at(-1)!.step).toBe(scores.length-1);
-      expect(points.map(p=>p.step)).toEqual([...new Set(points.map(p=>p.step))].sort((a,b)=>a-b));
-      for(let from=start;from<scores.length;from+=width){
-        const end=Math.min(scores.length,from+width), values=scores.slice(from,end), selected=points.filter(p=>p.step>=from&&p.step<end).map(p=>p.score);
-        expect(selected).toContain(Math.min(...values));expect(selected).toContain(Math.max(...values));
+  it('retains growth and efficiency extrema across sparse history and windows', () => {
+    const scores = Array.from({ length: 2049 }, (_, i) => Math.floor(i / 97) * 10);
+    for (const growth of [false, true]) for (const limit of [0, 1000, 19]) {
+      const points = sampleHistory(ScoreHistory.fromScores(scores), limit, growth, 6, 30);
+      const start = limit ? Math.max(0, scores.length - limit - 1) : 0;
+      const width = Math.ceil((scores.length - start) / 30);
+      const value = (score: number, step: number) => growth ? score / 10 + 6 : step ? score / 10 / step * 100 : 0;
+      expect(points[0].step).toBe(start);
+      expect(points.at(-1)!.step).toBe(scores.length - 1);
+      for (let from = start; from < scores.length; from += width) {
+        const end = Math.min(scores.length, from + width);
+        const values = scores.slice(from, end).map((score, i) => value(score, from + i));
+        const selected = points.filter(p => p.step >= from && p.step < end).map(p => p.score);
+        expect(selected).toContain(Math.min(...values));
+        expect(selected).toContain(Math.max(...values));
       }
     }
-    expect(sampler.sample([10,20,30],0,'double',n=>n*2).map(p=>p.score)).toEqual([20,40,60]);
-    expect(sampler.sample([],0,'empty',derive)).toEqual([]);
+    const long = new ScoreHistory();
+    long.length = 10_000_001;
+    long.changes.push([8_000_000, 10]);
+    const peak = sampleHistory(long, 0, false, 6).find(point => point.step === 8_000_000);
+    expect(peak?.score).toBeCloseTo(100 / 8_000_000, 12);
+    expect(long.changes).toHaveLength(2);
   });
 });
 describe('save scheduling',()=>{

@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { AutoPlayer } from './AutoPlayer';
 import { Game } from './Game';
 import { GridCycle } from './GridCycle';
+import { TorusCycle } from './TorusCycle';
 
 it('indexes a closed, adjacent cycle on even and odd boards in both orientations', () => {
   const shapes = [
@@ -33,7 +34,7 @@ it('plans and resumes autoplay on a board with over 16 million cells', () => {
   }
   expect(game.score).toBe(100);
   expect(game.autoCycle).toBeUndefined();
-  const restored = Game.restore(game.snapshot(), [...game.scores]);
+  const restored = Game.restore(game.snapshot(), game.scores);
   const move = new AutoPlayer().nextMove(restored);
   expect(move.safe).toBe(true);
   expect(move.direction).toBeDefined();
@@ -100,12 +101,30 @@ it('fills a nearly full board after saving and resuming autoplay', () => {
       const move = bot.nextMove(game);
       if (!move.safe || move.direction === undefined || !game.step(move.direction)) throw Error('Autoplay lost its safe route');
       bot.advance(game);
-      if (game.score === 100 && game.score !== game.scores[game.steps - 1]) {
-        game = Game.restore(game.snapshot(), [...game.scores]);
+      if (game.score === 100 && game.score !== game.scores.at(game.steps - 1)) {
+        game = Game.restore(game.snapshot(), game.scores);
         bot = new AutoPlayer();
       }
     }
     expect(game.won).toBe(true);
     expect(game.length).toBe(game.capacity);
   }
+});
+
+it('reduces detours when continuing a legacy 96 by 64 wall-board save', () => {
+  const game = new Game(42, 96, 64, false);
+  const cycle = new TorusCycle(game.width, game.height, undefined, false);
+  const length = Math.floor(game.capacity * .24);
+  const head = game.seed * 157 % game.capacity;
+  const body = Array.from({ length }, (_, i) => cycle.point((head - length + 1 + i + cycle.size) % cycle.size));
+  const restored = Game.restore({
+    ...game.snapshot(), autoCycle: cycle.cells, body, food: [], travel: body[length - 1], direction: cycle.direction(body[length - 2]),
+  }, [0]);
+  const bot = new AutoPlayer();
+  while (restored.score < 160 && restored.steps < 8000) {
+    const move = bot.nextMove(restored);
+    if (!move.safe || move.direction === undefined || !restored.step(move.direction)) throw Error('Autoplay lost its safe route');
+    bot.advance(restored);
+  }
+  expect(restored.score).toBe(160);
 });

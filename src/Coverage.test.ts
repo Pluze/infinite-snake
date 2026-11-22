@@ -14,7 +14,7 @@ it('fills the board safely and uses fewer aggregate moves than cycle-only play',
  for(const [w,h] of [[8,8],[13,9],[16,12]])for(const seed of [1,42,999]){
   const g=new Game(seed,w,h),bot=new AutoPlayer(),cycle=new TorusCycle(w,h);
   const max=w*h*w*h*2;
-  while(!g.won&&g.steps<max){const plan=bot.preview(g);expect(plan.safe).toBe(true);expect(plan.directions.length).toBeGreaterThan(0);expect(g.step(plan.directions[0])).toBe(true);bot.advance(g);if(g.won || g.score !== g.scores[g.steps - 1])expect(new TorusCycle(w,h,g.autoCycle).ordered(g.body())).toBe(true);}
+  while(!g.won&&g.steps<max){const plan=bot.preview(g);expect(plan.safe).toBe(true);expect(plan.directions.length).toBeGreaterThan(0);expect(g.step(plan.directions[0])).toBe(true);bot.advance(g);if(g.won || g.score !== g.scores.at(g.steps - 1))expect(new TorusCycle(w,h,g.autoCycle).ordered(g.body())).toBe(true);}
   expect(g.won).toBe(true);expect(g.dead).toBe(false);optimizedTotal+=g.steps;
   const baseline=new Game(seed,w,h);
   while(!baseline.won&&baseline.steps<max)expect(baseline.step(cycle.direction(baseline.head))).toBe(true);

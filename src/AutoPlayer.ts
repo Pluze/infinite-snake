@@ -5,24 +5,27 @@ import { boardDistance, routeCandidates, RouteNode, searchRoute } from './RouteS
 type Move = { direction?: Direction; safe: boolean; reason: string };
 type PreviewPath =
   | { cycle: Cycle; length: number }
-  | { points: Point[]; directions: Direction[]; cursor: number; origin: Point };
+  | { points: Point[]; directions: Direction[]; cursor: number; end: number; origin: Point };
 export type Plan = Move & { directions: Direction[]; points: Point[]; path?: PreviewPath };
+const ADAPTIVE_BOARD_CELLS = 4096;
+const useAdaptiveSearch = (game: Game) => game.capacity >= 8192
+  || (game.capacity >= ADAPTIVE_BOARD_CELLS && game.length <= game.capacity * .30);
 type SimulationBudget = { remaining: number };
-type FoodRoute = { directions: Direction[]; points: Point[]; coverage: boolean; cycleAfter?: GridCycle; rejoin?: FoodRoute };
+type FoodRoute = { directions: Direction[]; points: Point[]; coverage: boolean; cycleAfter?: Cycle; rejoin?: FoodRoute };
 
 /** Short chases and compact coverage with a cycle as a safety certificate. */
 export class AutoPlayer {
   private route: Direction[] = [];
   private points: Point[] = [];
   private cursor = 0;
-  private expected = '';
+  private expected?: Point;
   private cycle?: Cycle;
   private cycleRemaining = 0;
   private replanCycleAt = 0;
   private plannedStep = -1;
   private plannedMove?: Move;
   private pathOrigin?: Point;
-  private cycleAfter?: GridCycle;
+  private cycleAfter?: Cycle;
   private rejoin?: FoodRoute;
   private retryRejoinAt = Infinity;
   private game?: Game;
@@ -36,8 +39,9 @@ export class AutoPlayer {
     this.route = [];
     this.points = [];
     this.cursor = 0;
-    this.expected = '';
+    this.expected = undefined;
     this.cycleRemaining = 0;
+    this.replanCycleAt = 0;
     this.cycleAfter = undefined;
     this.rejoin = undefined;
     this.retryRejoinAt = Infinity;
@@ -48,20 +52,27 @@ export class AutoPlayer {
     this.retryRewireAt = 0;
     this.coverageRoute = false;
   }
+  reset() {
+    this.clear();
+    this.game = undefined;
+    this.cycle = undefined;
+    this.pathOrigin = undefined;
+  }
   preview(game: Game): Plan {
     const move = this.nextMove(game);
     if (move.direction === undefined) return { ...move, directions: [], points: [] };
     if (this.cursor < this.route.length) {
+      const end = Math.min(this.route.length, this.cursor + this.retryRejoinAt - game.steps);
       return {
         ...move,
-        directions: this.route.slice(this.cursor, this.cursor + 64),
-        points: this.points.slice(this.cursor, this.cursor + 64),
-        path: { points: this.points, directions: this.route, cursor: this.cursor, origin: this.pathOrigin! },
+        directions: this.route.slice(this.cursor, Math.min(end, this.cursor + 64)),
+        points: this.points.slice(this.cursor, Math.min(end, this.cursor + 64)),
+        path: { points: this.points, directions: this.route, cursor: this.cursor, end, origin: this.pathOrigin! },
       };
     }
     if (this.cycleRemaining) {
       // The cycle may be a temporary fallback while a shortcut opens.
-      const untilReplan = game.capacity >= 8192 ? this.replanCycleAt - game.steps : Infinity;
+      const untilReplan = this.replanCycleAt > game.steps ? this.replanCycleAt - game.steps : Infinity;
       const length = Math.min(this.cycleRemaining, untilReplan);
       const directions: Direction[] = [], points: Point[] = [];
       let point = game.head;
@@ -85,7 +96,7 @@ export class AutoPlayer {
       const canCycle = game.wraparound
         || (game.width > 1 && game.height > 1 && (game.width % 2 === 0 || game.height % 2 === 0));
       this.cycle = canCycle
-        ? game.capacity > 65_536 || (game.capacity >= 8192 && !game.autoCycle)
+        ? game.capacity > 65_536 || (game.capacity >= ADAPTIVE_BOARD_CELLS && !game.autoCycle)
           ? new GridCycle(game.width, game.height, game.wraparound)
           : new TorusCycle(game.width, game.height, game.autoCycle, game.wraparound)
         : undefined;
@@ -100,12 +111,15 @@ export class AutoPlayer {
   }
 
   private planMove(game: Game): Move {
-    const large = game.capacity >= 8192;
-    if (game.steps >= this.retryRejoinAt && this.cycle instanceof GridCycle) {
+    const large = useAdaptiveSearch(game);
+    if (game.steps >= this.retryRejoinAt && this.cycle) {
       // A few retries during a long escape can use cells the tail has since released.
       const remaining = this.route.length - this.cursor;
-      this.retryRejoinAt = remaining > 512 ? game.steps + Math.ceil(remaining / 3) : Infinity;
-      const chase = this.certifiedChase(game, this.cycleAfter ?? this.cycle, remaining);
+      const food = game.food.values().next().value;
+      const bite = food ? this.points.findIndex((p, i) => i >= this.cursor && p.x === food.x && p.y === food.y) : -1;
+      const before = bite < 0 ? remaining : bite - this.cursor + 1;
+      this.retryRejoinAt = before > 192 ? game.steps + Math.min(this.retryWindow(game), Math.ceil(before / 3)) : Infinity;
+      const chase = this.certifiedChase(game, this.cycleAfter ?? this.cycle, before);
       if (chase) {
         this.cursor = 0;
         this.retryRejoinAt = Infinity;
@@ -113,7 +127,7 @@ export class AutoPlayer {
       }
     }
     const replan = !large && this.coverageRoute && Math.max(this.route.length - this.cursor, this.cycleRemaining) > 32 && game.steps >= this.retryRewireAt;
-    if (!replan && this.expected === key(game.head)) {
+    if (!replan && this.expected === game.head) {
       const next = this.route[this.cursor];
       if (next !== undefined && game.canMove(next)) return { direction: next, safe: true, reason: this.phaseReason };
       if ((large || this.coverageRoute) && this.cycleRemaining > 0 && game.steps < this.replanCycleAt) return this.followCycle(game, this.cycleRemaining, this.phaseReason);
@@ -123,6 +137,7 @@ export class AutoPlayer {
     this.cursor = 0;
     this.coverageRoute = false;
     this.cycleRemaining = 0;
+    this.replanCycleAt = 0;
     this.cycleAfter = undefined;
     this.rejoin = undefined;
     this.retryRejoinAt = Infinity;
@@ -149,9 +164,12 @@ export class AutoPlayer {
       }
     }
     if (!this.ordered) {
-      if (this.cycle instanceof GridCycle && this.canCertifyRejoin(game)) {
+      if (large && this.canCertifyRejoin(game)) {
         const rejoin = this.certifyRejoin(game, this.cycle);
-        if (rejoin) return this.cacheRoute(game, rejoin, 'Rejoining the safe cycle');
+        if (rejoin) {
+          if (rejoin.directions.length > 192) this.retryRejoinAt = game.steps + 64;
+          return this.cacheRoute(game, rejoin, 'Rejoining the safe cycle');
+        }
       }
       return this.planRecovery(game);
     }
@@ -178,11 +196,11 @@ export class AutoPlayer {
     const cycle = this.cycle!;
     if (game.steps < this.retryRewireAt || cycle.distance(game.head, food) >= cycle.distance(game.head, game.tail)) return false;
     this.retryRewireAt = game.steps + Math.max(12, Math.ceil(game.capacity / 256));
-    if (cycle instanceof GridCycle && game.capacity <= 65_536 && game.length >= game.capacity * .45)
+    if (cycle instanceof GridCycle && game.capacity <= 65_536 && (!useAdaptiveSearch(game) || game.length >= game.capacity * .45))
       this.cycle = new TorusCycle(game.width, game.height, cycle, game.wraparound);
     if (!(this.cycle instanceof TorusCycle)) return false;
 
-    const large = game.capacity >= 8192;
+    const large = useAdaptiveSearch(game);
     const dense = large && game.length >= game.capacity * .85;
     const editLimit = dense ? 2 : large ? 1 : 4;
     let changed = false;
@@ -200,18 +218,18 @@ export class AutoPlayer {
     if (shortcut) {
       candidates.push(shortcut);
       const skipped = limit - shortcut.directions.length;
-      if (skipped >= 4 && game.capacity < 8192) {
+      if (skipped >= 4 && !useAdaptiveSearch(game)) {
         const compact = this.coverageShortcut(game, limit, clearance, Math.floor(skipped / 2));
         if (compact) candidates.push(compact);
       }
     }
 
     let partial: FoodRoute | undefined;
-    if (food && game.capacity >= 8192) {
+    if (food && useAdaptiveSearch(game)) {
       const chase = candidates.find(route => route.rejoin);
       if (chase) {
         // Restoring a compact body costs some movement after the bite.
-        const cost = chase.directions.length + chase.rejoin!.directions.length / (game.length > 256 ? 8 : 2);
+        const cost = chase.directions.length + chase.rejoin!.directions.length / (game.length <= 256 ? 2 : game.capacity < 8192 ? 16 : 8);
         if (cost < Math.min(limit, ...candidates.filter(route => route !== chase).map(route => route.directions.length))) {
           return this.cacheRoute(game, chase, 'Chasing food');
         }
@@ -232,13 +250,19 @@ export class AutoPlayer {
       if (bestLength > Math.max(64, directDistance * 2) && this.rewire(game, food)) {
         return this.planCoverage(game, []);
       }
-      if (partial && !candidates.length) return this.cacheRoute(game, partial, 'Taking a shortcut through the safe cycle');
+      if (partial && !candidates.length) {
+        if (this.canCertifyRejoin(game) && game.length > 256) {
+          partial.directions.length = Math.min(this.retryWindow(game) * 3 / 4, partial.directions.length);
+          partial.points.length = partial.directions.length;
+        }
+        return this.cacheRoute(game, partial, 'Taking a shortcut through the safe cycle');
+      }
     }
 
     const next = cycle.direction(game.head);
     const safe = game.canMove(next);
     if (food && safe && candidates.length) {
-      const forecast = game.capacity >= 8192 && game.length > 256 && game.length < game.capacity * .85;
+      const forecast = useAdaptiveSearch(game) && game.length > 256 && game.length < game.capacity * .85;
       const cycleForecast = forecast ? this.forecastFoodCost(game, cycle, food, limit) : undefined;
       const forecasts = cycleForecast !== undefined
         ? candidates.map(route => this.forecastFoodCost(game, route.cycleAfter ?? cycle, food, route.directions.length, route))
@@ -266,7 +290,7 @@ export class AutoPlayer {
     }
 
     const reason = game.length / game.capacity < .75 ? 'Keeping the food route open' : 'Compact board filling';
-    if (game.capacity >= 8192 && food) {
+    if (useAdaptiveSearch(game) && food) {
       // The food can spawn in a gap behind the head. Once the tail has passed
       // that gap, search again instead of committing to the rest of the lap.
       if (slack === 0 && this.cycle instanceof GridCycle) {
@@ -279,11 +303,16 @@ export class AutoPlayer {
           if (cycle.distance(game.tail, game.segments.get(middle)!) <= target) low = middle + 1;
           else high = middle;
         }
-        this.replanCycleAt = game.steps + low - game.first;
+        this.replanCycleAt = game.steps + Math.min(low - game.first, this.canCertifyRejoin(game) ? this.retryWindow(game) : Infinity);
         this.retryChaseAt = Math.min(this.retryChaseAt, this.replanCycleAt);
       } else {
         this.replanCycleAt = game.steps + Math.max(32, Math.ceil(boardDistance(game, game.head, food) / 2));
       }
+    } else if (food && game.capacity >= ADAPTIVE_BOARD_CELLS && game.length * 2 >= game.capacity
+      && this.retryRewireAt > game.steps && Math.min(game.width, game.height) > 2) {
+      // No chasing or shortcuts can be considered before the next rewire.
+      this.coverageRoute = true;
+      this.replanCycleAt = this.retryRewireAt;
     }
     return this.followCycle(game, limit, reason);
   }
@@ -291,7 +320,7 @@ export class AutoPlayer {
   private coverageShortcut(game: Game, limit: number, clearance: number, slack: number): FoodRoute | undefined {
     if (slack < 1 || limit >= clearance) return;
     const cycle = this.cycle!;
-    if (game.capacity >= 8192) {
+    if (useAdaptiveSearch(game)) {
       const food = cycle.point((cycle.index(game.head) + limit) % cycle.size);
       const path = searchRoute(game, game.head, food, this.searchBudget(game), (from, to, steps) => {
         const progress = cycle.distance(game.head, to);
@@ -364,7 +393,7 @@ export class AutoPlayer {
   private followCycle(game: Game, length: number, reason: string): Move {
     const direction = this.cycle!.direction(game.head);
     this.cycleRemaining = length;
-    this.expected = key(game.head);
+    this.expected = game.head;
     this.phaseReason = reason;
     return { direction, safe: game.canMove(direction), reason };
   }
@@ -426,7 +455,7 @@ export class AutoPlayer {
     const first = game.first + removed;
     let distance = 0;
     // Only the scoring heuristic is sampled. Route safety uses exact cycle order.
-    const stride = game.capacity >= 8192 ? Math.max(1, Math.ceil((game.last - first) / 512)) : 1;
+    const stride = useAdaptiveSearch(game) ? Math.max(1, Math.ceil((game.last - first) / 512)) : 1;
     for (let i = first; i < game.last; i += stride) {
       distance += cycle.distance(food, game.segments.get(i)!) * Math.min(stride, game.last - i);
     }
@@ -443,7 +472,7 @@ export class AutoPlayer {
     const free = game.capacity - game.length;
     const fill = game.length / game.capacity;
     const allowance = Math.min(1, Math.max(0, (.5 - fill) / .38)) ** 3;
-    const largeAllowance = game.capacity >= 8192 ? Math.max(0, (.85 - fill) * .4) : 0;
+    const largeAllowance = useAdaptiveSearch(game) ? Math.max(0, (.85 - fill) * .4) : 0;
     const narrowAllowance = Math.min(game.width, game.height) === 2 ? Math.max(0, (.8 - fill) * .65) : 0;
     return Math.floor(Math.max(allowance, largeAllowance, narrowAllowance) * free);
   }
@@ -462,7 +491,7 @@ export class AutoPlayer {
     this.points = route.points;
     this.phaseReason = reason;
     this.coverageRoute = route.coverage;
-    this.expected = key(game.head);
+    this.expected = game.head;
     this.pathOrigin = game.head;
     this.cycleAfter = route.cycleAfter;
     this.rejoin = route.rejoin;
@@ -505,15 +534,15 @@ export class AutoPlayer {
 
   // Null means this search tree found the food, but its route failed the safety check.
   private findFoodRoute(game: Game, requireCycleOrder: boolean, turnLeftFirst = false): FoodRoute | null | undefined {
-    if (game.capacity >= 8192) {
+    if (useAdaptiveSearch(game)) {
       const routes = this.largeFoodRoutes(game);
       const route = routes.next().value;
       if (!route) return;
       if (this.safeFoodRoute(game, route, requireCycleOrder)) return route;
       const cycle = this.cycle;
       // A long chase can reach a reverse cycle directly once the old body is gone.
-      if (requireCycleOrder && cycle instanceof GridCycle) {
-        if (route.points.length > game.length) {
+      if (requireCycleOrder && cycle) {
+        if (cycle instanceof GridCycle && route.points.length > game.length) {
           const reverse = cycle.reversed();
           if (this.safeFoodRoute(game, route, true, reverse)) return { ...route, cycleAfter: reverse };
         }
@@ -547,8 +576,14 @@ export class AutoPlayer {
       }
     }
   }
+  private retryWindow(game: Game) {
+    // On rectangular walled boards, retry sooner as the tail opens a cross-row route.
+    return !game.wraparound && game.width !== game.height ? 128 : 256;
+  }
+
   private canCertifyRejoin(game: Game) {
-    return game.length <= Math.min(8192, game.capacity * .15);
+    const fillLimit = game.capacity < 8192 ? .30 : .15;
+    return game.length <= Math.min(8192, game.capacity * fillLimit);
   }
 
   private *largeFoodRoutes(game: Game): Generator<FoodRoute, void> {
@@ -560,7 +595,7 @@ export class AutoPlayer {
     }
   }
 
-  private certifiedChase(game: Game, cycle: GridCycle, before: number,
+  private certifiedChase(game: Game, cycle: Cycle, before: number,
     routes = this.largeFoodRoutes(game), budget = this.rejoinBudget(game)) {
     let candidates = 0;
     for (const route of routes) {
@@ -574,10 +609,11 @@ export class AutoPlayer {
     return { remaining: Math.max(1024, Math.ceil(game.length * 2.5)) };
   }
 
-  private certifyRejoin(game: Game, cycle: GridCycle, chase?: FoodRoute, budget = this.rejoinBudget(game)): FoodRoute | undefined {
-    const orientations = [cycle, cycle.reversed()];
-    if (game.wraparound && game.length > 256) {
-      const transposed = cycle.transposed();
+  private certifyRejoin(game: Game, cycle: Cycle, chase?: FoodRoute, budget = this.rejoinBudget(game)): FoodRoute | undefined {
+    const grid = cycle instanceof GridCycle ? cycle : new GridCycle(game.width, game.height, game.wraparound);
+    const orientations: Cycle[] = cycle === grid ? [grid, grid.reversed()] : [grid, grid.reversed(), cycle];
+    if (game.length > 256 && (game.wraparound || game.width !== game.height)) {
+      const transposed = grid.transposed();
       orientations.push(transposed, transposed.reversed());
     }
     // Use the real spawn sequence in the fork. This keeps the escape valid
@@ -620,7 +656,7 @@ export class AutoPlayer {
     }
   }
 
-  private escapeTurn(game: Game, cycle: GridCycle) {
+  private escapeTurn(game: Game, cycle: Cycle) {
     let best: Direction | undefined;
     let longest = -1;
     for (let d = 0; d < 4; d++) {
@@ -658,12 +694,13 @@ export class AutoPlayer {
   advance(game: Game) {
     this.cursor++;
     this.cycleRemaining = Math.max(0, this.cycleRemaining - 1);
-    this.expected = key(game.head);
+    this.expected = game.head;
     if (this.cursor === this.route.length && this.cycleAfter) {
       this.cycle = this.cycleAfter;
+      if (this.cycle instanceof GridCycle) game.autoCycle = undefined;
       this.ordered = true;
     }
-    if (game.score !== game.scores[game.steps - 1]) {
+    if (game.score !== game.scores.at(game.steps - 1)) {
       if (this.cursor === this.route.length && this.rejoin) {
         this.cursor = 0;
         this.cacheRoute(game, this.rejoin, 'Rejoining the safe cycle');
@@ -686,7 +723,7 @@ export class AutoPlayer {
     const firstAppended = Math.max(0, first - game.last + 1);
     const appended = new Set(path.slice(firstAppended, -1).map(key));
     const isBlocked = (cell: string) => (game.occupied.get(cell) ?? -1) >= first || appended.has(cell);
-    if (game.capacity >= 8192) {
+    if (useAdaptiveSearch(game)) {
       return Boolean(searchRoute(game, head, tail, this.searchBudget(game),
         (_from, to) => {
           const cell = key(to);

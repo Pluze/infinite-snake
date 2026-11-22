@@ -1,3 +1,4 @@
+import { ScoreHistory } from './ScoreHistory';
 export const MAX_WORLD_SIDE = 4096;
 export type Point = { x: number; y: number };
 export type Direction = 0 | 1 | 2 | 3;
@@ -7,7 +8,7 @@ export const key = (p: Point) => `${p.x},${p.y}`;
 export const add = (p: Point, d: Direction): Point => ({ x: p.x + vectors[d].x, y: p.y + vectors[d].y });
 const modulo = (n: number, size: number) => ((n % size) + size) % size;
 const nextRandom = (state: number) => { state ^= state << 13; state ^= state >>> 17; return (state ^ (state << 5)) >>> 0; };
-export type Snapshot = { version: 2; seed: number; rng: number; width: number; height: number; wraparound?: boolean; hitWall?: boolean; food: Point[]; autoCycle?: Point[]; body: Point[]; travel: Point; direction: Direction; steps: number; turns: number; elapsed: number; dead: boolean; won: boolean; score: number };
+export type Snapshot = { version: 2; seed: number; rng: number; width: number; height: number; wraparound?: boolean; hitWall?: boolean; food: Point[]; autoCycle?: Point[]; body: Point[]; travel: Point; direction: Direction; steps: number; turns: number; elapsed: number; dead: boolean; won: boolean; score: number; historyEvents?: number };
 export class Game {
   seed: number;
   rng: number;
@@ -17,7 +18,7 @@ export class Game {
   food = new Map<string, Point>();
   segments = new Map<number, Point>();
   occupied = new Map<string, number>();
-  scores: number[] = [0];
+  scores = new ScoreHistory();
   private planningOccupancy?: Uint8Array;
   private planningBody?: Point[];
   private planningOrigin = 0;
@@ -135,7 +136,7 @@ export class Game {
     this.steps++;
     if (!this.planningBody) {
       this.travel = add(this.travel, d);
-      this.scores.push(this.score);
+      this.scores.record(this.score);
     }
     this.won = this.length === this.capacity;
     this.refillFood();
@@ -163,13 +164,13 @@ export class Game {
     copy.score = this.score;
     copy.dead = this.dead;
     copy.won = this.won;
-    copy.scores = [this.score];
+    copy.scores = new ScoreHistory(this.score);
     return copy;
   }
   snapshot(): Snapshot {
     return { version: 2, seed: this.seed, rng: this.rng, width: this.width, height: this.height, wraparound: this.wraparound, hitWall: this.hitWall, food: [...this.food.values()], autoCycle: this.autoCycle, body: this.body(), travel: this.travel, direction: this.direction, steps: this.steps, turns: this.turns, elapsed: this.elapsed, dead: this.dead, won: this.won, score: this.score };
   }
-  static restore(s: Snapshot, scores: number[]) {
+  static restore(s: Snapshot, scores: number[] | ScoreHistory) {
     if (s.version !== 2 || !Array.isArray(s.body) || s.body.length < 1 || !s.body.every(p => Number.isSafeInteger(p.x) && Number.isSafeInteger(p.y) && p.x >= 0 && p.x < s.width && p.y >= 0 && p.y < s.height) || ![0,1,2,3].includes(s.direction) || scores.length !== s.steps + 1 || new Set(s.body.map(key)).size !== s.body.length) throw Error('Incomplete save format');
     const game = new Game(s.seed, s.width, s.height, s.wraparound !== false);
     game.segments.clear(); game.occupied.clear(); game.first = game.last = 0;
@@ -180,7 +181,7 @@ export class Game {
     game.autoCycle = Array.isArray(s.autoCycle) ? s.autoCycle : undefined;
     game.food = new Map(s.food.slice(0, 1).map(p => [key(p), p]));
     game.refillFood();
-    game.scores = scores;
+    game.scores = Array.isArray(scores) ? ScoreHistory.fromScores(scores) : scores;
     return game;
   }
 }

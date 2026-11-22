@@ -79,6 +79,11 @@ export class Renderer {
     this.manualUntil = 0;
     this.onCameraChange();
   }
+  resetOverview() {
+    this.overviewGame = undefined;
+    this.overviewPattern = null;
+    this.overview.width = this.overview.height = 1;
+  }
   render(game: Game, plan: Plan, overlay: boolean, running: boolean, auto: boolean) {
     const now = performance.now(), dt = Math.min((now - this.last) / 1000, .1); this.last = now;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -195,7 +200,7 @@ export class Renderer {
           }
         }
       } else if (path) {
-        for (let i = path.cursor; i < path.directions.length; i++) {
+        for (let i = path.cursor; i < path.end; i++) {
           const point = i === 0 ? path.origin : path.points[i - 1];
           copies(point, (x, y) => edge(x, y, path.directions[i]));
         }
@@ -286,7 +291,7 @@ export class Renderer {
         const stride = Math.max(1, Math.ceil(path.length / 16_384));
         for (let i = 0; i < path.length; i += stride) plot(path.cycle.point((start + i) % path.cycle.size));
       } else if (path) {
-        for (let i = path.cursor; i < path.points.length; i++) plot(path.points[i]);
+        for (let i = path.cursor; i < path.end; i++) plot(path.points[i]);
       }
       raster.fillStyle = '#68c994';
       const stride = Math.max(1, Math.ceil(game.length / 32_768));
