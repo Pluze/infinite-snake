@@ -155,17 +155,19 @@ test('draws the route and highlights food past the old preview cutoff', async ({
     const distant = { x: 3000, y: 3000 };
     sparse.food = new Map([[key(distant), distant]]);
 
-    const dense = new Game(42, 256, 256, false);
-    const cycle = new GridCycle(256, 256, false);
-    const body = Array.from({ length: 60_000 }, (_, i) => cycle.point(i));
-    const food = cycle.point(65_000);
-    const restored = Game.restore({ ...dense.snapshot(), body, food: [food], travel: body[body.length - 1],
-      direction: cycle.direction(body[body.length - 2]) }, [0]);
-    return { sparse: capture(sparse), dense: capture(restored, true) };
+    const dense = (width: number) => {
+      const game = new Game(42, width, 256, false);
+      const cycle = new GridCycle(width, 256, false);
+      const body = Array.from({ length: 60_000 }, (_, i) => cycle.point(i));
+      return Game.restore({ ...game.snapshot(), body, food: [cycle.point(65_000)], travel: body[body.length - 1],
+        direction: cycle.direction(body[body.length - 2]) }, [0]);
+    };
+    return { sparse: capture(sparse), tiled: capture(dense(256), true), indexed: capture(dense(258), true) };
   });
   expect(result).toEqual({
     sparse: { edges: true, foodOutline: true, cycle: false },
-    dense: { edges: true, foodOutline: true, cycle: true },
+    tiled: { edges: true, foodOutline: true, cycle: false },
+    indexed: { edges: true, foodOutline: true, cycle: true },
   });
 });
 
