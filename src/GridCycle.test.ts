@@ -6,7 +6,7 @@ import { TorusCycle } from './TorusCycle';
 
 it('indexes a closed, adjacent cycle on even and odd boards in both orientations', () => {
   const shapes = [
-    [2, 3, false], [3, 2, false], [7, 8, false], [8, 7, false],
+    [1, 7, true], [7, 1, true], [1, 8, true], [8, 1, true], [2, 3, false], [3, 2, false], [7, 8, false], [8, 7, false],
     [2, 5, true], [5, 2, true], [7, 7, true], [8, 7, true], [7, 8, true],
   ] as const;
   for (const [width, height, wraparound] of shapes) {
@@ -147,4 +147,14 @@ it('executes delayed shortcuts after the tail releases a gap', () => {
   }
   expect(waited).toBe(true);
   expect(restored.score).toBe(160);
+});
+
+it('can plan on sparse worlds beyond the old side limit', () => {
+  for (const [width, height] of [[65_535, 65_537], [1, 1_000_001], [1_000_001, 1]]) {
+    const game = new Game(42, width, height);
+    const move = new AutoPlayer().nextMove(game);
+    expect(move.safe).toBe(true);
+    expect(game.step(move.direction)).toBe(true);
+    expect(Game.restore(game.snapshot(), game.scores).head).toEqual(game.head);
+  }
 });

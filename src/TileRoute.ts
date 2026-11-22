@@ -1,13 +1,14 @@
 import { boardDistance, searchRoute } from './RouteSearch';
-import { Direction, Game, key, Point } from './Game';
+import { Direction, Game, Point } from './Game';
 
 class Forest {
   private parent: Int32Array;
   components: number;
   constructor(size: number) {
-    this.parent = new Int32Array(size).fill(-1);
+    this.parent = new Int32Array(size);
     this.components = size;
   }
+  reset() { this.parent.fill(-1); this.components = this.parent.length; }
   root(i: number): number {
     let r = i;
     while (this.parent[r] >= 0) r = this.parent[r];
@@ -43,6 +44,16 @@ function neighbors(game: Game) {
   return result;
 }
 
+// Candidates run synchronously. A simulated continuation can borrow the same
+// scratch space because only its returned directions and points escape a search.
+function makeWorkspace(count: number) {
+  return {
+    forest: new Forest(count), flags: new Int8Array(2 * count),
+    protectedEdge: new Uint8Array(2 * count), deferred: new Int32Array(2 * count),
+    parent: new Int32Array(count), depth: new Int32Array(count), queue: new Int32Array(count),
+  };
+}
+const workspaces = new WeakMap<Game, ReturnType<typeof makeWorkspace>>();
 const bodyEdges = new WeakMap<Game, { next: number; codes: Int32Array }>();
 
 const INVALID_EDGE = 0x7fffffff;
@@ -68,7 +79,7 @@ export function tileRoute(game: Game): Route | undefined {
   if (!target) return;
   const budget = Math.min(2048, boardDistance(game, game.head, target) * 2 + 64);
   const path = searchRoute(game, game.head, target, budget,
-    (_from, to, step) => (game.occupied.get(key(to)) ?? -1) < game.first + step, game.direction);
+    (_from, to, step) => (game.segmentAt(to) ?? -1) < game.first + step, game.direction);
   if (path) {
     const moves = path.slice(1);
     const chase = { directions: moves.map(n => n.d), points: moves.map(n => n.p) };
@@ -79,6 +90,8 @@ export function tileRoute(game: Game): Route | undefined {
     if (game.length < game.capacity / 3) {
       const fork = game.forkForPlanning();
       adjacency.set(fork, neighbors(game));
+      const workspace = workspaces.get(game);
+      if (workspace) workspaces.set(fork, workspace);
       if (chase.directions.every(d => fork.step(d))) {
         let budgetLeft = 2048;
         for (let meal = 1; meal < 6 && budgetLeft > 0; meal++) {
@@ -108,7 +121,7 @@ export function tileRoute(game: Game): Route | undefined {
     if (!alternative || alternative.points.length <= release || (best && alternative.points.length >= best.points.length)) continue;
     let safe = true;
     for (let i = 0; i < release; i++) {
-      if ((game.occupied.get(key(alternative.points[i])) ?? -1) > game.first + i) { safe = false; break; }
+      if ((game.segmentAt(alternative.points[i]) ?? -1) > game.first + i) { safe = false; break; }
     }
     if (safe) best = alternative;
   }
@@ -123,8 +136,11 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
   if (!food || w % 2 || h % 2 || w < 4 || h < 4 || game.length < 2) return;
   const cols = w / 2, count = cols * (h / 2);
   const tile = (x: number, y: number) => (y >> 1) * cols + (x >> 1);
-  const flags = new Int8Array(count * 2); // forbidden, optional, or joined
-  const forest = new Forest(count);
+  let workspace = workspaces.get(game);
+  if (!workspace) { workspace = makeWorkspace(count); workspaces.set(game, workspace); }
+  const { flags, forest, protectedEdge, deferred, parent, depth, queue } = workspace;
+  flags.fill(0);
+  forest.reset();
   const adjacent = neighbors(game);
   const neighbor = (t: number, d: number) => adjacent[4 * t + d];
   const edge = (t: number, d: number, n: number) => 2 * (d < 2 ? t : n) + (d & 1);
@@ -171,44 +187,51 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
     previous = p;
   }
   if (chase) {
-    for (let t = 0; t < count; t++) for (let d = 0; d < 2; d++) {
-      const n = neighbor(t, d);
-      if (n >= 0 && flags[2 * t + d] >= 0) forest.join(t, n);
+    for (let t = 0; t < count && forest.components > 1; t++) for (let d = 0; d < 2; d++) {
+      const n = adjacent[4 * t + d];
+      if (n >= 0 && !flags[2 * t + d]) forest.join(t, n);
     }
     return forest.components === 1 ? chase : undefined;
   }
   const goal = tile(food.x, food.y), root = forest.root(tile(previous.x, previous.y));
-  const protectedEdge = new Uint8Array(flags.length);
+  protectedEdge.fill(0);
+  const tail = segment(first);
   function trace(protect: boolean, visit?: (n: number, id: number, step: number) => void) {
     const directions: Direction[] = [], points: Point[] = [];
-    let p = game.head, prev = game.segment(game.last - 2)!;
+    let { x, y } = game.head;
+    const previousCell = game.segment(game.last - 2)!;
+    let prevX = previousCell.x, prevY = previousCell.y;
     for (let step = 0; step < game.capacity; step++) {
-      const t = tile(p.x, p.y);
-      const east = p.x % 2 === 1, south = p.y % 2 === 1;
+      const t = tile(x, y);
+      const east = (x & 1) === 1, south = (y & 1) === 1;
       let moved = false;
       for (let arm = 0; arm < 2; arm++) {
         const side = arm ? (south ? 1 : 3) : (east ? 0 : 2);
         const n = neighbor(t, side), id = edge(t, side, n);
         const joined = n >= 0 && flags[id] === 1;
         const d = (joined ? side : arm ? (east ? 2 : 0) : (south ? 3 : 1)) as Direction;
-        const next = game.next(p, d);
-        if (next.x === prev.x && next.y === prev.y) continue;
+        let nx = x, ny = y;
+        if (d === 0) nx = x + 1 === w ? 0 : x + 1;
+        else if (d === 2) nx = x === 0 ? w - 1 : x - 1;
+        else if (d === 1) ny = y + 1 === h ? 0 : y + 1;
+        else ny = y === 0 ? h - 1 : y - 1;
+        if (nx === prevX && ny === prevY) continue;
         if (!joined && n >= 0) {
           if (visit && !flags[id]) visit(n, id, step);
           else if (protect) protectedEdge[id] = 1;
         }
-        if (!protect && !visit) { directions.push(d); points.push(next); }
-        prev = p; p = next; moved = true; break;
+        if (!protect && !visit) { directions.push(d); points.push({ x: nx, y: ny }); }
+        prevX = x; prevY = y; x = nx; y = ny; moved = true; break;
       }
       if (!moved) return;
-      if (visit && p.x === segment(first).x && p.y === segment(first).y) return;
-      if (p.x === food!.x && p.y === food!.y) return { directions, points };
+      if (visit && x === tail.x && y === tail.y) return;
+      if (x === food!.x && y === food!.y) return { directions, points };
     }
   }
   if (forest.root(goal) !== root) {
     // Distance from each free tile to the food, without crossing the body tree.
-    const parent = new Int32Array(count).fill(-1), depth = new Int32Array(count);
-    const queue = new Int32Array(count);
+    parent.fill(-1);
+    depth[goal] = 0;
     queue[0] = goal; parent[goal] = goal;
     let end = 1;
     for (let i = 0; i < end; i++) {
@@ -238,13 +261,17 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
   if (!trace(true)) return;
   // Attach the rest of the board behind the food wherever possible. Only a
   // disconnected component can force an extra detour into the protected arc.
-  for (let priority = 0; priority <= 1; priority++) {
-    for (let t = 0; t < count; t++) for (let d = 0; d < 2; d++) {
-      const id = 2 * t + d;
-      if (flags[id] || protectedEdge[id] !== priority) continue;
-      const n = neighbor(t, d);
-      if (n >= 0 && forest.join(t, n)) flags[id] = 1;
-    }
+  let deferredCount = 0;
+  for (let id = 0; id < flags.length && forest.components > 1; id++) {
+    if (flags[id]) continue;
+    const t = id >> 1, n = adjacent[4 * t + (id & 1)];
+    if (n < 0) continue;
+    if (protectedEdge[id]) deferred[deferredCount++] = id;
+    else if (forest.join(t, n)) flags[id] = 1;
+  }
+  for (let i = 0; i < deferredCount && forest.components > 1; i++) {
+    const id = deferred[i], t = id >> 1;
+    if (forest.join(t, adjacent[4 * t + (id & 1)])) flags[id] = 1;
   }
   // A missing component would make the fallback cycle incomplete.
   if (forest.components !== 1) return;

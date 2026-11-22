@@ -20,7 +20,27 @@ describe('finite torus rules', () => {
       expect(large.food.size).toBe(1);
     }
     expect(() => new Game(42, 0, 8)).toThrow();
-    expect(() => new Game(42, 8, 4097)).toThrow();
+    expect(new Game(42, 65_535, 65_537).capacity).toBe(2 ** 32 - 1);
+    expect(() => new Game(42, 65_536, 65_536)).toThrow();
+  });
+  it('restores connected body segments using the saved boundary rules', () => {
+    const initial = new Game(42, 8, 8).snapshot();
+    const crossing = { ...initial, body: [{ x: 7, y: 0 }, { x: 0, y: 0 }], travel: { x: 0, y: 0 }, food: [] };
+    expect(Game.restore(crossing, [0]).length).toBe(2);
+    expect(() => Game.restore({ ...crossing, wraparound: false }, [0])).toThrow('Disconnected');
+    expect(() => Game.restore({ ...crossing, body: [crossing.travel, crossing.travel] }, [0])).toThrow('Repeated');
+  });
+  it('keeps restored history independent and rejects a mismatched saved score', () => {
+    const original = new Game(42);
+    const bite = original.next(original.head, original.direction);
+    original.food = new Map([[key(bite), bite]]);
+    const saved = original.snapshot();
+    const restored = Game.restore(saved, original.scores);
+    expect(restored.step()).toBe(true);
+    expect(restored.scores.at(1)).toBe(10);
+    expect(original.scores.length).toBe(1);
+    expect(original.scores.changes).toEqual([[0, 0]]);
+    expect(() => Game.restore({ ...saved, score: 10 }, original.scores)).toThrow('Inconsistent');
   });
   it('wraps in all four directions and aliases repeated coordinates', () => {
     const g = new Game(42);
@@ -57,13 +77,13 @@ describe('finite torus rules', () => {
   it('ignores reversals and allows entry into a vacating tail', () => {
     const g = new Game(42); expect(g.step(2)).toBe(true); expect(g.head.x).toBe(6);
     const tail=fixture([{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}],2);
-    expect(tail.step(3)).toBe(true); expect(tail.occupied.size).toBe(4); expect(tail.occupied.has('0,0')).toBe(true);
+    expect(tail.step(3)).toBe(true); expect(tail.occupied.size).toBe(4); expect(tail.isOccupied({x:0,y:0})).toBe(true);
   });
   it('respawns a single food on an unoccupied cell after eating', () => {
     const g=new Game(42); expect(g.food.size).toBe(1);
     const next=g.next(g.head,0); g.food.delete(g.food.keys().next().value!); g.food.set(key(next),next);
     expect(g.step()).toBe(true); expect(g.length).toBe(7); expect(g.score).toBe(10);
-    expect(g.food.size).toBe(Number(!g.won)); expect([...g.food.keys()].every(k=>!g.occupied.has(k))).toBe(true);
+    expect(g.food.size).toBe(Number(!g.won)); expect([...g.food.values()].every(p=>!g.isOccupied(p))).toBe(true);
     expect(new Game(42).snapshot()).toEqual(new Game(42).snapshot());
   });
   it('keeps one food and retains progress when loading a legacy multi-food save', () => {
@@ -112,7 +132,7 @@ describe('torus autoplay', () => {
       expect(result.head).toEqual(food);
       expect(result.length).toBe(body.length + 1);
       expect(cycle.ordered(result.body())).toBe(true);
-      const free = cycle.cells.filter(p => !result.occupied.has(key(p)));
+      const free = cycle.cells.filter(p => !result.isOccupied(p));
       return directions.length + free.reduce((sum, p) => sum + cycle.distance(food, p), 0) / free.length;
     };
     const shorter: Direction[] = [0, 0, 0, 3, 3];

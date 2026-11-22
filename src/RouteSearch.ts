@@ -27,6 +27,7 @@ export function* routeCandidates(
 ): Generator<RouteNode[], void> {
   const id = (p: Point) => p.y * game.width + p.x;
   const left = boardDistance(game, start, target);
+  if (left > budget) return;
   const nodes: SearchNode[] = [{ p: start, id: id(start), d: startDirection ?? 0, parent: -1, steps: 0, left, cost: left }];
   const best = new Map([[nodes[0].id, 0]]);
   const heap = [0];

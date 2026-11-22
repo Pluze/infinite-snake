@@ -1,5 +1,5 @@
 import './style.css';
-import { Direction, Game, MAX_WORLD_SIDE } from './Game';
+import { Direction, Game, MAX_WORLD_CELLS, validWorldSize } from './Game';
 import { AutoPlayer, Plan } from './AutoPlayer';
 import { Renderer } from './Renderer';
 import { Persistence } from './Persistence';
@@ -79,7 +79,7 @@ function toggle() {
   running = !running; message = ''; credit = 0; lastTick = performance.now();
   if (!running) { saver.markDirty(); saver.flush(); } ui();
 }
-function mode(isAuto: boolean) { previewStep = -1; auto = isAuto; if (!auto) speedPower = Math.min(speedPower, 9); pendingDirections = []; bot.clear(); plan = { directions: [], points: [], safe: true, reason: '' }; message = ''; settings(); ui(); }
+function mode(isAuto: boolean) { previewStep = -1; auto = isAuto; if (!auto) speedPower = Math.min(speedPower, 9); pendingDirections = []; bot.reset(); plan = { directions: [], points: [], safe: true, reason: '' }; message = ''; settings(); ui(); }
 function steer(d: Direction) {
   if (!ready || busy || game.dead || game.won) return;
   if (auto) mode(false);
@@ -95,7 +95,7 @@ function move() {
   if (checkbox('risk').checked && (!game.canMove(d) || (next && !next.safe))) {
     document.body.classList.add('warning'); pause(`Risk pause: ${next && !next.safe ? next.reason : game.contains(game.next(game.head, d)) ? 'your body is directly ahead' : 'a wall is directly ahead'}. Turn or disable Pause before risk to continue.`); return false;
   }
-  if (!auto) pendingDirections.shift();
+  if (!auto) { pendingDirections.shift(); game.autoBridge = undefined; }
   const moved = game.step(d);
   if (auto && moved) bot.advance(game);
   if (game.score > best) { best = game.score; writeLocal('snake-best', String(best)); }
@@ -140,8 +140,10 @@ $('help').onclick = () => { pause(); closeMenu(); $<HTMLDialogElement>('help-dia
 $('help-close').onclick = () => $<HTMLDialogElement>('help-dialog').close();
 function updateWorldPreview() {
   const width = checkbox('world-width').valueAsNumber, height = checkbox('world-height').valueAsNumber;
-  const valid = checkbox('world-width').validity.valid && checkbox('world-height').validity.valid;
-  $('world-preview').textContent = valid ? `${fmt(width * height)} cells · ${checkbox('world-wrap').checked ? 'Edges wrap' : 'Solid walls'}` : `Enter whole numbers from 1 to ${fmt(MAX_WORLD_SIDE)} for both sides.`;
+  const valid = validWorldSize(width, height);
+  const error = `Use positive whole numbers and at most ${fmt(MAX_WORLD_CELLS)} cells in total.`;
+  checkbox('world-height').setCustomValidity(valid ? '' : error);
+  $('world-preview').textContent = valid ? `${fmt(width * height)} cells · ${checkbox('world-wrap').checked ? 'Edges wrap' : 'Solid walls'}` : error;
 }
 $('new-game').onclick = () => {
   pause(); checkbox('world-width').value = String(game.width); checkbox('world-height').value = String(game.height);
@@ -157,7 +159,6 @@ $<HTMLSelectElement>('world-preset').onchange = () => {
 };
 for (const id of ['world-width', 'world-height']) {
   const input = checkbox(id);
-  input.max = String(MAX_WORLD_SIDE);
   input.oninput = () => { $<HTMLSelectElement>('world-preset').value = 'custom'; updateWorldPreview(); };
 }
 checkbox('world-wrap').onchange = updateWorldPreview;

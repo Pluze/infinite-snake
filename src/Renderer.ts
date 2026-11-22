@@ -1,4 +1,4 @@
-import { Direction, Game, key, Point, vectors } from './Game';
+import { Direction, Game, Point, vectors } from './Game';
 import { Plan } from './AutoPlayer';
 import { SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
@@ -235,7 +235,7 @@ export class Renderer {
     } else {
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
-        const index = game.occupied.get(key(point));
+        const index = game.segmentAt(point);
         if (index === undefined) continue;
         const pos = screen(x, y);
         drawSegment(index, point, pos.x, pos.y);

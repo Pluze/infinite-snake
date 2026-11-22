@@ -1,5 +1,7 @@
 # 256 × 256 autoplay benchmark
 
+These measurements cover earlier planner revisions. See the [tile planner and subsequent benchmarks](tile-routing.md) for later results.
+
 The baseline is the deployed revision `fd451ca`. Both boundary modes use seeds 42, 91, and 999. Opening runs collect 100 foods from a fresh board. The other runs start at 8%, 50%, 90%, or 98% occupancy with a contiguous body and collect 16 foods each. The benchmark executes every move and fails on an unsafe move or if a run exceeds two million steps.
 
 Peak planning time is the maximum measured wall-clock time of an `AutoPlayer.nextMove` call in Node.js, including garbage collection and scheduling. Long routes are intervals of more than 1,024 actual moves between meals. The geometric lower bound sums head-to-food Manhattan distances at the start of each interval, taking the shorter distance on each wrapped axis. Different routes can change later food placement, so each lower bound applies to its own run.

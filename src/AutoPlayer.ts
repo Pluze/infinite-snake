@@ -1,4 +1,5 @@
 import { Direction, Game, key, Point } from './Game';
+import { shortestFinish } from './Endgame';
 import { bridgeLength } from './CycleBridge';
 import { tileRoute } from './TileRoute';
 import { chooseCycleRollout } from './CycleRollout';
@@ -25,6 +26,7 @@ export class AutoPlayer {
   private cycle?: Cycle;
   private cycleRemaining = 0;
   private retryTileAt = Infinity;
+  private endgameLength = 0;
   private bridgeRetryStep = 0;
   private bridgeEnd = 0;
   private afterWait?: { at: number; route: FoodRoute };
@@ -44,6 +46,7 @@ export class AutoPlayer {
   private coverageRoute = false;
   clear() {
     this.afterWait = undefined;
+    this.endgameLength = 0;
     this.retryTileAt = Infinity;
     this.bridgeRetryStep = this.bridgeEnd = 0;
     this.route = [];
@@ -72,7 +75,7 @@ export class AutoPlayer {
     const move = this.nextMove(game);
     if (move.direction === undefined) return { ...move, directions: [], points: [] };
     if (this.cursor < this.route.length) {
-      const end = Math.min(this.route.length, this.cursor + this.retryRejoinAt - game.steps);
+      const end = Math.min(this.route.length, this.cursor + (Math.min(this.retryTileAt, this.retryRejoinAt) - game.steps));
       return {
         ...move,
         directions: this.route.slice(this.cursor, Math.min(end, this.cursor + 64)),
@@ -110,22 +113,44 @@ export class AutoPlayer {
           ? new GridCycle(game.width, game.height, game.wraparound)
           : new TorusCycle(game.width, game.height, game.autoCycle, game.wraparound)
         : undefined;
+      const saved = game.autoBridge;
+      if (saved) {
+        const cycle = new GridCycle(game.width, game.height, false, saved.reverse, saved.swapAxes, saved.row, saved.column);
+        const remaining = saved.until - game.steps;
+        if (bridgeLength(game, cycle, { maxSteps: remaining }) === remaining) {
+          this.cycle = cycle;
+          this.bridgeEnd = this.replanCycleAt = saved.until;
+        } else game.autoBridge = undefined;
+      }
     }
     if (game.dead || game.won) {
+      game.autoBridge = undefined;
       this.clear();
       return { safe: game.won, reason: game.won ? 'World filled' : 'Game over' };
     }
     if (this.plannedMove && this.plannedStep === game.steps) return this.plannedMove;
+    this.plannedMove = this.planMove(game);
     this.plannedStep = game.steps;
-    return this.plannedMove = this.planMove(game);
+    return this.plannedMove;
   }
 
   private planMove(game: Game): Move {
     const large = useAdaptiveSearch(game);
+    if (game.capacity - game.length <= 6 && game.length > this.endgameLength) {
+      this.endgameLength = game.length;
+      const finish = shortestFinish(game);
+      if (finish) {
+        game.autoBridge = undefined;
+        this.clear();
+        this.endgameLength = game.capacity;
+        return this.cacheRoute(game, { ...finish, coverage: false }, 'Following a shortest route to victory');
+      }
+    }
     if (this.bridgeEnd) {
       if (game.steps < this.bridgeEnd) return this.followCycle(game, this.bridgeEnd - game.steps, 'Moving to a shorter food cycle');
       this.bridgeEnd = 0;
-      this.ordered = true;
+      game.autoBridge = undefined;
+      this.ordered = undefined;
       this.retryChaseAt = 0;
     }
     if (game.steps >= this.retryTileAt) {
@@ -173,7 +198,7 @@ export class AutoPlayer {
     this.replanCycleAt = 0;
     this.cycleAfter = undefined;
     this.rejoin = undefined;
-    this.retryRejoinAt = Infinity;
+    this.retryRejoinAt = this.retryTileAt = Infinity;
     const tiled = game.capacity >= ADAPTIVE_BOARD_CELLS && game.capacity <= 65_536
       && game.width >= 4 && game.height >= 4 && game.width % 2 === 0 && game.height % 2 === 0;
     if (tiled && this.retryChaseAt === 0) {
@@ -272,14 +297,36 @@ export class AutoPlayer {
     const vertical = horizontal.transposed();
     const shift = game.head.y - game.head.y % 2;
     const shifted = new GridCycle(game.width, game.height, false, false, false, shift);
-    for (const cycle of [shifted, horizontal, horizontal.reversed(), vertical, vertical.reversed()]) {
-      const length = bridgeLength(game, cycle);
-      if (!length) continue;
+    const food = game.food.values().next().value!;
+    const crossing = boardDistance(game, game.head, food);
+    const options = [shifted, horizontal, horizontal.reversed(), vertical, vertical.reversed()];
+    // Align a return lane with either side of the head and food tiles. Even
+    // translations preserve the 2 × 2 tiling after the handover.
+    function origins(a: number, b: number, size: number) {
+      return new Set([0, a - a % 2, (a + a % 2) % size, b - b % 2, (b + b % 2) % size]);
+    }
+    const columns = origins(game.head.x, food.x, game.width);
+    for (const row of origins(game.head.y, food.y, game.height)) for (const column of columns) {
+      if (!row && !column) continue;
+      for (const swap of [false, true]) {
+        const cycle = new GridCycle(game.width, game.height, false, false, swap, row, column);
+        options.push(cycle, cycle.reversed());
+      }
+    }
+    let best: { cycle: GridCycle; length: number; first: number } | undefined;
+    for (const cycle of options) {
+      const first = cycle.distance(game.head, food);
+      const length = bridgeLength(game, cycle, { accept: ticks => !best || ticks > best.length ||
+        (ticks === best.length && first <= ticks && best.first - first >= crossing) });
+      if (length) best = { cycle, length, first };
+    }
+    if (best) {
       this.ordered = undefined;
-      this.cycle = cycle;
-      this.bridgeEnd = game.steps + length;
+      this.cycle = best.cycle;
+      this.bridgeEnd = game.steps + best.length;
+      game.autoBridge = best.cycle.bridgeSave(this.bridgeEnd);
       this.replanCycleAt = this.bridgeEnd;
-      return this.followCycle(game, length, 'Moving to a shorter food cycle');
+      return this.followCycle(game, best.length, 'Moving to a shorter food cycle');
     }
   }
 
@@ -453,7 +500,7 @@ export class AutoPlayer {
     const offset = (point: Point) => (cycle.index(point) - start + cycle.size) % cycle.size;
     let current = origin;
     let progress = 0;
-    const budget = Math.min(incumbent - 1, Math.max(1024, game.width + game.height));
+    const budget = Math.min(8192, incumbent - 1, Math.max(1024, game.width + game.height));
     for (let step = 1; step <= budget; step++) {
       const released = game.segments.get(game.first + step);
       const retained = game.segments.get(game.first + step - 1);
@@ -505,7 +552,7 @@ export class AutoPlayer {
     const lastCells = route && new Set(route.points.slice(-appended).map(key));
     const target = game.forecastFood(point => {
       const cell = key(point);
-      if (retained && (game.occupied.get(cell) ?? -1) >= first) return true;
+      if (retained && (game.segmentAt(point) ?? -1) >= first) return true;
       if (lastCells) return lastCells.has(cell);
       return cycle.distance(point, food) < appended;
     });
@@ -598,7 +645,7 @@ export class AutoPlayer {
   }
 
   private searchBudget(game: Game) {
-    return Math.max(2048, game.width + game.height + 128);
+    return Math.min(8320, Math.max(2048, game.width + game.height + 128));
   }
 
   private searchedRoute(path: RouteNode[], coverage = false): FoodRoute {
@@ -668,7 +715,7 @@ export class AutoPlayer {
       if (game.length === 1 && i === 0) directions.push((n.d + 2) % 4 as Direction);
       for (const d of directions) {
         const p = game.next(n.p, d), k = key(p);
-        if (!game.contains(p) || seen.has(k) || game.occupied.has(k)) continue;
+        if (!game.contains(p) || seen.has(k) || game.isOccupied(p)) continue;
         seen.add(k);
         nodes.push({ p, parent: i, d, straight: d === n.d ? n.straight + 1 : 1 });
       }
@@ -688,7 +735,7 @@ export class AutoPlayer {
     const food = game.food.values().next().value;
     if (!food) return;
     for (const path of routeCandidates(game, game.head, food, this.searchBudget(game),
-      (_from, to, steps) => (game.occupied.get(key(to)) ?? -1) < game.first + steps, game.direction)) {
+      (_from, to, steps) => (game.segmentAt(to) ?? -1) < game.first + steps, game.direction)) {
       yield this.searchedRoute(path);
     }
   }
@@ -850,12 +897,12 @@ export class AutoPlayer {
     const tailKey = key(tail);
     const firstAppended = Math.max(0, first - game.last + 1);
     const appended = new Set(path.slice(firstAppended, -1).map(key));
-    const isBlocked = (cell: string) => (game.occupied.get(cell) ?? -1) >= first || appended.has(cell);
+    const isBlocked = (point: Point, cell: string) => (game.segmentAt(point) ?? -1) >= first || appended.has(cell);
     if (useAdaptiveSearch(game)) {
       return Boolean(searchRoute(game, head, tail, this.searchBudget(game),
         (_from, to) => {
           const cell = key(to);
-          return cell === tailKey || !isBlocked(cell);
+          return cell === tailKey || !isBlocked(to, cell);
         }));
     }
     const seen = new Set([key(head)]), queue = [head];
@@ -864,7 +911,7 @@ export class AutoPlayer {
         const p = game.next(queue[i], d as Direction), cell = key(p);
         if (!game.contains(p)) continue;
         if (cell === tailKey) return true;
-        if (!isBlocked(cell) && !seen.has(cell)) { seen.add(cell); queue.push(p); }
+        if (!isBlocked(p, cell) && !seen.has(cell)) { seen.add(cell); queue.push(p); }
       }
     }
     return false;

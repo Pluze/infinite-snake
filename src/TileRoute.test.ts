@@ -3,6 +3,7 @@ import { Game } from './Game';
 import { GridCycle } from './GridCycle';
 import { AutoPlayer } from './AutoPlayer';
 import { bridgeLength } from './CycleBridge';
+import { shortestFinish } from './Endgame';
 import { tileRoute } from './TileRoute';
 
 function savedBoard(seed: number, w: number, h: number, wrap: boolean) {
@@ -55,19 +56,73 @@ it('predicts the exact release tick of the old body across a torus seam', () => 
   expect(grew).toBe(true);
 });
 
-it('resumes a half-full wrapped game while changing cycles', () => {
-  let game = savedBoard(91, 256, 256, true);
-  let bot = new AutoPlayer(), restored = false;
-  while (game.steps < 80_000 && game.score < 160) {
-    const move = bot.nextMove(game);
-    if (!move.safe || move.direction === undefined || !game.step(move.direction)) throw Error('Unsafe transition');
-    bot.advance(game);
-    if (!restored && move.reason === 'Moving to a shorter food cycle' && game.steps % 300 === 0) {
-      game = Game.restore(game.snapshot(), game.scores);
-      bot = new AutoPlayer();
-      restored = true;
+it('resumes the same certified lane at multiple points in a half-full game', () => {
+  for (const seed of [91, 113]) {
+    let game = savedBoard(seed, 256, 256, true);
+    let bot = new AutoPlayer(), restored = 0;
+    while (game.steps < 80_000 && game.score < 160) {
+      const move = bot.nextMove(game);
+      if (game.autoBridge && game.steps % 300 === 0 && restored < 3) {
+        const saved = game.snapshot();
+        game = Game.restore(saved, game.scores);
+        bot = new AutoPlayer();
+        expect(bot.nextMove(game)).toEqual(move);
+        expect(game.autoBridge).toEqual(saved.autoBridge);
+        restored++;
+      }
+      if (!move.safe || move.direction === undefined || !game.step(move.direction)) throw Error('Unsafe transition');
+      bot.advance(game);
     }
+    expect(restored).toBe(3);
+    expect(game.score).toBe(160);
+    if (seed === 113) expect(game.steps).toBeLessThan(40_000);
   }
-  expect(restored).toBe(true);
-  expect(game.score).toBe(160);
+});
+
+it('previews only the moves committed before the next tile search', () => {
+  const game = savedBoard(21, 96, 64, false);
+  const bot = new AutoPlayer();
+  const { path } = bot.preview(game);
+  if (!path || 'cycle' in path) throw Error('Expected an explicit food route');
+  expect(path.end).toBeGreaterThan(0);
+  expect(path.end).toBeLessThan(path.directions.length);
+  for (let i = path.cursor; i < path.end; i++) {
+    const move = bot.nextMove(game);
+    expect(move.direction).toBe(path.directions[i]);
+    if (!move.safe || !game.step(move.direction)) throw Error('Invalid preview');
+    bot.advance(game);
+  }
+  expect(bot.preview(game).directions.length).toBeGreaterThan(0);
+});
+
+it('matches an independent shortest-win search with real steps and food respawns', () => {
+  for (const [wrap, seed, start] of [[false, 2, 1], [true, 1, 0]] as const) {
+    const initial = new Game(seed, 6, 4, wrap);
+    const cycle = new GridCycle(6, 4, wrap);
+    const body = Array.from({ length: 18 }, (_, i) => cycle.point((start + i) % 24));
+    const game = Game.restore({ ...initial.snapshot(), body, travel: body[17],
+      direction: cycle.direction(body[16]), food: [] }, [0]);
+    const route = shortestFinish(game);
+    if (!route) throw Error('Expected a winning suffix');
+    let layer = [game];
+    for (let depth = 0; depth <= route.directions.length; depth++) {
+      expect(layer.some(state => state.won)).toBe(depth === route.directions.length);
+      if (depth === route.directions.length) break;
+      const next: Game[] = [];
+      for (const state of layer) for (const d of [0, 1, 2, 3] as const) {
+        if (!state.canMove(d)) continue;
+        const branch = state.forkForPlanning();
+        branch.step(d);
+        next.push(branch);
+      }
+      layer = next;
+    }
+    const bot = new AutoPlayer();
+    for (const direction of route.directions) {
+      expect(bot.nextMove(game)).toMatchObject({ direction, safe: true });
+      expect(game.step(direction)).toBe(true);
+      bot.advance(game);
+    }
+    expect(game.won).toBe(true);
+  }
 });

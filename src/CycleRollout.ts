@@ -1,4 +1,4 @@
-import { Direction, Game, Point, nextRandom } from './Game';
+import { Direction, drawFoodCell, Game, Point } from './Game';
 import { boardDistance } from './RouteSearch';
 import { Cycle } from './TorusCycle';
 
@@ -74,20 +74,17 @@ export function projectSpawn(game: Game, cycle: Cycle, body: Body, rng: number) 
   const offset = (a: number, b: number) => forward(a, b, size);
   // Binary search an ordered body instead of copying or scanning it.
   const tail = body.at(0);
-  for (let attempt = 0; attempt < 24; attempt++) {
-    rng = nextRandom(rng);
-    const cell = Math.floor(rng / 4294967296 * size);
-    const p = { x: cell % game.width, y: Math.floor(cell / game.width) };
-    const needle = offset(tail, cycle.index(p));
+  const draw = drawFoodCell(rng, size, cell => {
+    const needle = offset(tail, cycle.index(game.pointAt(cell)));
     let lo = 0, hi = body.length;
     while (lo < hi) {
       const mid = Math.floor((lo + hi) / 2);
       if (offset(tail, body.at(mid)) < needle) lo = mid + 1;
       else hi = mid;
     }
-    if (lo < body.length && offset(tail, body.at(lo)) === needle) continue;
-    return { target: p, rng };
-  }
+    return lo === body.length || offset(tail, body.at(lo)) !== needle;
+  });
+  if (draw.cell >= 0) return { target: game.pointAt(draw.cell), rng: draw.rng };
 }
 
 /** Compare certified forward-jump policies on identical RNG states. Consecutive

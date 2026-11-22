@@ -100,12 +100,12 @@ test('custom dimensions accept both endpoints', async ({ page }) => {
   await menu(page);
   await page.locator('#new-game').click();
   await page.locator('#world-width').fill('1');
-  await page.locator('#world-height').fill('4097');
-  await expect(page.locator('#world-preview')).toContainText('from 1 to 4,096');
-  await page.locator('#world-height').fill('4096');
-  await expect(page.locator('#world-preview')).toHaveText('4,096 cells · Edges wrap');
+  await page.locator('#world-height').fill('4294967296');
+  await expect(page.locator('#world-preview')).toContainText('at most 4,294,967,295 cells');
+  await page.locator('#world-height').fill('8193');
+  await expect(page.locator('#world-preview')).toHaveText('8,193 cells · Edges wrap');
   await page.locator('#restart-confirm').click();
-  await expect(page.locator('#world-caption')).toHaveText('1 × 4,096 · edges wrap');
+  await expect(page.locator('#world-caption')).toHaveText('1 × 8,193 · edges wrap');
   await expect(page.locator('#board')).toHaveAttribute('data-position', '0, 5');
 });
 
@@ -216,7 +216,7 @@ test('loading timeout cancels storage and enables a session-only game', async ({
 });
 
 test('the loading button retries when the game script failed to load', async ({ page }) => {
-  await page.route('**/src/index.ts', route => route.abort(), { times: 1 });
+  await page.route(url => url.pathname === '/src/index.ts', route => route.abort(), { times: 1 });
   await page.goto('/');
   await expect(page.locator('#loading-text')).toContainText('The game could not load');
   await page.getByRole('button', { name: 'Start new game without loading save' }).click();

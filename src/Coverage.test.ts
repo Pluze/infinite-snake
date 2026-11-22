@@ -14,7 +14,27 @@ it('fills the board safely and uses fewer aggregate moves than cycle-only play',
  for(const [w,h] of [[8,8],[13,9],[16,12]])for(const seed of [1,42,999]){
   const g=new Game(seed,w,h),bot=new AutoPlayer(),cycle=new TorusCycle(w,h);
   const max=w*h*w*h*2;
-  while(!g.won&&g.steps<max){const plan=bot.preview(g);expect(plan.safe).toBe(true);expect(plan.directions.length).toBeGreaterThan(0);expect(g.step(plan.directions[0])).toBe(true);bot.advance(g);if(g.won || g.score !== g.scores.at(g.steps - 1))expect(new TorusCycle(w,h,g.autoCycle).ordered(g.body())).toBe(true);}
+  while (!g.won && g.steps < max) {
+    const plan = bot.preview(g);
+    expect(plan.safe).toBe(true);
+    expect(plan.directions.length).toBeGreaterThan(0);
+    expect(g.step(plan.directions[0])).toBe(true);
+    bot.advance(g);
+    if (g.won || g.score !== g.scores.at(g.steps - 1)) {
+      if (plan.reason === 'Following a shortest route to victory') {
+        const restored = Game.restore(g.snapshot(), g.scores);
+        const resumed = new AutoPlayer();
+        while (!restored.won) {
+          const move = resumed.nextMove(restored);
+          expect(move.reason).toBe('Following a shortest route to victory');
+          expect(restored.step(move.direction)).toBe(true);
+          resumed.advance(restored);
+        }
+      } else {
+        expect(new TorusCycle(w,h,g.autoCycle).ordered(g.body())).toBe(true);
+      }
+    }
+  }
   expect(g.won).toBe(true);expect(g.dead).toBe(false);optimizedTotal+=g.steps;
   const baseline=new Game(seed,w,h);
   while(!baseline.won&&baseline.steps<max)expect(baseline.step(cycle.direction(baseline.head))).toBe(true);
@@ -38,7 +58,7 @@ function foodEfficiencyArea(capacity: number, steps: number[]) {
 }
 
 it('improves efficiency AUC while still filling each benchmark board safely', () => {
-  // Cumulative steps at each 10% checkpoint from the published planner (384fa6b).
+  // Historical 10% checkpoints preserved in the initial release fixture (96d4173).
   const runs = [
     { width: 32, height: 24, seed: 42, wrap: true, previous: [1694,3982,8491,13756,19500,24906,29974,33941,37145,38274] },
     { width: 64, height: 48, seed: 42, wrap: true, previous: [20431,59493,114962,205131,287950,356393,439094,498613,542621,559048] },

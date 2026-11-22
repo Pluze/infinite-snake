@@ -83,7 +83,7 @@ export class Persistence {
           for (const block of blocks as number[][]) for (const score of block) {
             if (!Number.isFinite(score) || (readCount && score < scores.changes[scores.changes.length - 1][1]))
               throw Error('Invalid score history');
-            if (!readCount) scores.changes[0][1] = score;
+            if (!readCount) scores.changes[0] = [0, score];
             else scores.record(score);
             readCount++;
           }
