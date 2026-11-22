@@ -143,3 +143,21 @@ describe('torus persistence',()=>{
     await p.clear();expect(await p.load(()=>{})).toBeUndefined();
   });
 });
+
+it('keeps planning simulation and real food spawns identical', () => {
+  const game = new Game(42, 256, 256, false);
+  const target = game.next(game.head, game.direction);
+  game.food = new Map([[key(target), target]]);
+  const probe = game.forkForPlanning();
+  expect(game.steps).toBe(0);
+  const forecast = game.forecastFood(point => game.isOccupied(point) || key(point) === key(target));
+  for (const direction of [0, 1, 1, 2, 2, 3] as Direction[]) {
+    expect(probe.canMove(direction)).toBe(game.canMove(direction));
+    expect(probe.step(direction)).toBe(game.step(direction));
+    if (game.steps === 1) expect([...game.food.values()]).toEqual([forecast]);
+    expect(probe.body()).toEqual(game.body());
+    expect(probe.food).toEqual(game.food);
+    expect(probe.rng).toBe(game.rng);
+    expect(probe.score).toBe(game.score);
+  }
+});

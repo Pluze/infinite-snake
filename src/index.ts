@@ -30,14 +30,15 @@ function settings() {
 try {
   const s = JSON.parse(readLocal('snake-torus-settings-v2', '{}'));
   auto = false; speedPower = Number.isInteger(s.speedPower) ? Math.max(0, Math.min(16, s.speedPower)) : 3;
-  checkbox('overlay').checked = s.overlay !== false; checkbox('risk').checked = s.risk === true;
-  renderer.follow = s.follow !== false; renderer.autozoom = s.autozoom !== false;
+  checkbox('overlay').checked = s.overlay !== false; checkbox('risk').checked = s.risk !== false;
+  renderer.follow = s.follow === true; renderer.autozoom = s.autozoom !== false;
 } catch { /* Invalid preferences do not invalidate a saved game. */ }
 checkbox('speed').value = String(speedPower);
 function updateCameraUI() {
   $('recenter').hidden = renderer.follow && performance.now() >= renderer.manualUntil;
   checkbox('follow').checked = renderer.follow; checkbox('autozoom').checked = renderer.autozoom;
-  $('zoom-label').textContent = `${Math.round(renderer.scale / 24 * 100)}%`;
+  const percent = renderer.scale / 24 * 100;
+  $('zoom-label').textContent = `${percent < 1 || percent > 100_000 ? percent.toExponential(1) : Math.round(percent)}%`;
   $('camera-status').textContent = !renderer.follow ? 'Free camera' : performance.now() < renderer.manualUntil ? 'Panning · follow resumes soon' : 'Following';
 }
 renderer.onCameraChange = () => { updateCameraUI(); settings(); };
@@ -52,14 +53,17 @@ function ui() {
   $('speed-mid').textContent = auto ? '256' : '16–32'; $('speed-max').textContent = auto ? '65,536' : '512';
   renderer.manual = !auto;
   $('world-caption').textContent = `${fmt(game.width)} × ${fmt(game.height)} · ${game.wraparound ? 'edges wrap' : 'solid walls'}`;
-  $('play').textContent = game.won ? 'You win!' : game.dead ? 'Game over' : running ? 'Pause' : game.steps ? 'Resume' : 'Start';
+  $('play').textContent = game.won ? 'You win!' : game.dead ? 'Game over · Play again' : running ? 'Pause' : game.steps ? 'Resume' : 'Start';
   $('mode-indicator').hidden = !auto;
   $('play').setAttribute('aria-pressed', String(running));
-  $<HTMLButtonElement>('play').disabled = !ready || busy || game.dead || game.won;
+  $<HTMLButtonElement>('play').disabled = !ready || busy || game.won;
+  const replay = $<HTMLButtonElement>('play-again');
+  replay.hidden = !game.dead;
+  replay.disabled = busy;
   $<HTMLButtonElement>('step').disabled = !ready || busy || running || game.dead;
   $('mode-auto').setAttribute('aria-pressed', String(auto)); $('mode-manual').setAttribute('aria-pressed', String(!auto));
   document.body.classList.toggle('manual', !auto); document.body.classList.toggle('dead', game.dead);
-  $('status').textContent = game.won ? 'You filled the entire board! Start a new game from the menu.' : game.dead ? `You hit ${game.hitWall ? 'a wall' : 'your body'}. Game over. Start a new game from the menu.` : message || (running ? auto ? `Autoplay · ${plan.reason}` : 'Manual · arrow keys / WASD / direction pad' : auto ? 'Autoplay paused · press Space to start' : 'Arrow keys / WASD / swipe to play · Space pauses');
+  $('status-text').textContent = game.won ? 'You filled the entire board! Start a new game from the menu.' : game.dead ? `You hit ${game.hitWall ? 'a wall' : 'your body'}. Game over.` : message || (running ? auto ? `Autoplay · ${plan.reason}` : 'Manual · arrow keys / WASD / direction pad' : auto ? 'Autoplay paused · press Space to start' : 'Arrow keys / WASD / swipe to play · Space pauses');
   $('status').hidden = running && !message && !game.dead && !game.won;
   updateCameraUI();
 }
@@ -92,7 +96,13 @@ function move() {
   if (game.dead || game.won) pause();
   return moved;
 }
-$('play').onclick = () => { toggle(); $('board').focus({ preventScroll: true }); };
+function playOrRetry() {
+  if (game.dead) void reset(game.width, game.height, game.wraparound, true);
+  else toggle();
+  $('board').focus({ preventScroll: true });
+}
+$('play').onclick = playOrRetry;
+$('play-again').onclick = playOrRetry;
 $('step').onclick = () => { if (!ready || busy || running || game.dead) return; document.body.classList.remove('warning'); message = ''; move(); saver.markDirty(); plan = auto ? bot.preview(game) : plan; ui(); };
 $('mode-auto').onclick = () => mode(true); $('mode-manual').onclick = () => mode(false);
 checkbox('speed').oninput = () => { speedPower = Number(checkbox('speed').value); credit = 0; settings(); ui(); };
@@ -146,12 +156,15 @@ for (const id of ['world-width', 'world-height']) {
 }
 checkbox('world-wrap').onchange = updateWorldPreview;
 $('restart-cancel').onclick = () => $<HTMLDialogElement>('restart-dialog').close();
-async function reset(width = game.width, height = game.height, wraparound = game.wraparound) {
-  if (busy) return; busy = true; running = false; saver.cancel();
+async function reset(width = game.width, height = game.height, wraparound = game.wraparound, quickReplay = false) {
+  if (busy) return;
+  busy = true; running = false; saver.cancel(); ui();
   try {
     const nextGame = new Game(undefined, width, height, wraparound);
     if (storageReady) await persistence.clear();
-    game = nextGame; auto = false; speedPower = Math.min(speedPower, 9); bot.clear(); charts.reset(); pendingDirections = []; restoreFailed = false;
+    game = nextGame;
+    if (!quickReplay) { auto = false; speedPower = Math.min(speedPower, 9); }
+    bot.clear(); charts.reset(); pendingDirections = []; restoreFailed = false;
     rateSteps = 0; rateTime = performance.now(); credit = 0; $('actual').textContent = 'Actual 0 steps/s';
     renderer.scale = 24; renderer.recenter(game, true); message = ''; ready = true;
     $('loading').hidden = true; $<HTMLDialogElement>('restart-dialog').close();
@@ -173,7 +186,7 @@ document.addEventListener('keydown', e => {
   if ((e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) || document.querySelector('dialog[open]')) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (k in keys) { e.preventDefault(); if (!e.repeat) steer(keys[k]); }
-  else if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) toggle(); }
+  else if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement && game.dead)) { e.preventDefault(); if (!e.repeat) toggle(); }
   else if (k === 'f') heldF = true;
   else if (k === 'c') renderer.recenter(game);
 });

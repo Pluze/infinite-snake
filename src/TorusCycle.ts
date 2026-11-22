@@ -25,10 +25,18 @@ export function cycleOrder(cycle: Pick<Cycle, 'size' | 'distance'>, body: Iterab
 export class TorusCycle {
   readonly cells: Point[] = [];
   private order: Int32Array;
-  constructor(readonly width: number, readonly height: number, saved?: Point[], private readonly wraparound = true) {
+  constructor(readonly width: number, readonly height: number, saved?: Point[] | Cycle, private readonly wraparound = true) {
     const size = width * height;
     this.order = new Int32Array(size).fill(-1);
-    if (saved?.length === size) {
+    if (saved && !Array.isArray(saved)) {
+      for (let i = 0; i < size; i++) {
+        const point = saved.point(i);
+        this.cells.push(point);
+        this.order[point.y * width + point.x] = i;
+      }
+      return;
+    }
+    if (Array.isArray(saved) && saved.length === size) {
       for (const point of saved) {
         if (!point || !Number.isInteger(point.x) || !Number.isInteger(point.y)
           || point.x < 0 || point.x >= width || point.y < 0 || point.y >= height
@@ -155,7 +163,7 @@ export class TorusCycle {
       || (dy === 0 && (dx === 1 || (this.wraparound && dx === this.width - 1)));
   }
 
-  bringFoodForward(head: Point, tail: Point, food: Point) {
+  bringFoodForward(head: Point, tail: Point, food: Point, dense = false) {
     const size = this.cells.length;
     const start = this.index(head);
     const at = (offset: number) => this.cells[(start + offset) % size];
@@ -166,7 +174,10 @@ export class TorusCycle {
     // Swapping two pairs of neighboring edges first splits off a loop, then
     // inserts it earlier in the free arc. No part of the body arc changes.
     const swaps: [number, number][] = [];
-    for (let i = 0; i < Math.min(clearance - 1, 4096); i++) {
+    let bestDistance = distance - 3;
+    let reversal: [number, number] | undefined;
+    const scanLimit = Math.min(clearance - 1, dense ? 10_000 : 4096);
+    for (let i = 0; i < scanLimit; i++) {
       const next = at(i + 1);
       for (const v of vectors) {
         let x = next.x + v.x;
@@ -177,9 +188,17 @@ export class TorusCycle {
         } else if (x < 0 || y < 0 || x >= this.width || y >= this.height) continue;
         const j = (this.order[y * this.width + x] - start + size) % size;
         if (j > i + 1 && j < clearance && this.adjacent(at(i), at(j + 1))) swaps.push([i, j]);
+        const endpoint = j - 1;
+        if (dense && i < distance && endpoint >= distance && j <= clearance
+          && this.adjacent(at(i), at(endpoint))) {
+          const newDistance = i + 1 + endpoint - distance;
+          if (newDistance < bestDistance) {
+            bestDistance = newDistance;
+            reversal = [i + 1, endpoint];
+          }
+        }
       }
     }
-    let bestDistance = distance - 3;
     let attempts = 0;
     let best: [number, number, number, number] | undefined;
     for (const [i, j] of swaps) {
@@ -195,17 +214,24 @@ export class TorusCycle {
       }
       if (attempts > 60_000) break;
     }
-    if (!best) return false;
-    const [i, j, k, l] = best;
+    if (!best && !reversal) return false;
+    const [i, j, k, l] = best ?? [0, 0, 0, 0];
     const reordered: Point[] = [];
     const append = (first: number, last: number) => {
       for (let offset = first; offset <= last; offset++) reordered.push(at(offset));
     };
-    append(l + 1, j);
-    append(i + 1, l);
-    append(k + 1, i);
+    let firstChanged = k + 1;
+    if (best) {
+      append(l + 1, j);
+      append(i + 1, l);
+      append(k + 1, i);
+    } else if (reversal) {
+      const [first, last] = reversal;
+      firstChanged = first;
+      for (let offset = last; offset >= first; offset--) reordered.push(at(offset));
+    }
     reordered.forEach((point, index) => {
-      const position = (start + k + 1 + index) % size;
+      const position = (start + firstChanged + index) % size;
       this.cells[position] = point;
       this.order[point.y * this.width + point.x] = position;
     });

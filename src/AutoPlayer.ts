@@ -1,13 +1,14 @@
 import { Direction, Game, key, Point } from './Game';
 import { Cycle, TorusCycle } from './TorusCycle';
 import { GridCycle } from './GridCycle';
-import { boardDistance, RouteNode, searchRoute } from './RouteSearch';
+import { boardDistance, routeCandidates, RouteNode, searchRoute } from './RouteSearch';
 type Move = { direction?: Direction; safe: boolean; reason: string };
 type PreviewPath =
   | { cycle: Cycle; length: number }
   | { points: Point[]; directions: Direction[]; cursor: number; origin: Point };
 export type Plan = Move & { directions: Direction[]; points: Point[]; path?: PreviewPath };
-type FoodRoute = { directions: Direction[]; points: Point[]; coverage: boolean; cycleAfter?: GridCycle };
+type SimulationBudget = { remaining: number };
+type FoodRoute = { directions: Direction[]; points: Point[]; coverage: boolean; cycleAfter?: GridCycle; rejoin?: FoodRoute };
 
 /** Short chases and compact coverage with a cycle as a safety certificate. */
 export class AutoPlayer {
@@ -22,6 +23,8 @@ export class AutoPlayer {
   private plannedMove?: Move;
   private pathOrigin?: Point;
   private cycleAfter?: GridCycle;
+  private rejoin?: FoodRoute;
+  private retryRejoinAt = Infinity;
   private game?: Game;
   private retryRewireAt = 0;
   private ordered: boolean | undefined;
@@ -36,6 +39,8 @@ export class AutoPlayer {
     this.expected = '';
     this.cycleRemaining = 0;
     this.cycleAfter = undefined;
+    this.rejoin = undefined;
+    this.retryRejoinAt = Infinity;
     this.plannedStep = -1;
     this.plannedMove = undefined;
     this.ordered = undefined;
@@ -96,6 +101,17 @@ export class AutoPlayer {
 
   private planMove(game: Game): Move {
     const large = game.capacity >= 8192;
+    if (game.steps >= this.retryRejoinAt && this.cycle instanceof GridCycle) {
+      // A few retries during a long escape can use cells the tail has since released.
+      const remaining = this.route.length - this.cursor;
+      this.retryRejoinAt = remaining > 512 ? game.steps + Math.ceil(remaining / 3) : Infinity;
+      const chase = this.certifiedChase(game, this.cycleAfter ?? this.cycle, remaining);
+      if (chase) {
+        this.cursor = 0;
+        this.retryRejoinAt = Infinity;
+        return this.cacheRoute(game, chase, 'Chasing food');
+      }
+    }
     const replan = !large && this.coverageRoute && Math.max(this.route.length - this.cursor, this.cycleRemaining) > 32 && game.steps >= this.retryRewireAt;
     if (!replan && this.expected === key(game.head)) {
       const next = this.route[this.cursor];
@@ -108,14 +124,18 @@ export class AutoPlayer {
     this.coverageRoute = false;
     this.cycleRemaining = 0;
     this.cycleAfter = undefined;
+    this.rejoin = undefined;
+    this.retryRejoinAt = Infinity;
     if (!this.cycle) return this.planRecovery(game);
     if (this.ordered !== true) {
       this.ordered = this.cycle.ordered(game.segments.values());
       if (!this.ordered && this.cycle instanceof GridCycle) {
-        const reversed = this.cycle.reversed();
-        if (reversed.ordered(game.segments.values())) {
-          this.cycle = reversed;
+        const transposed = this.cycle.transposed();
+        for (const candidate of [this.cycle.reversed(), transposed, transposed.reversed()]) {
+          if (!candidate.ordered(game.segments.values())) continue;
+          this.cycle = candidate;
           this.ordered = true;
+          break;
         }
       }
     }
@@ -128,7 +148,13 @@ export class AutoPlayer {
         this.ordered = true;
       }
     }
-    if (!this.ordered) return this.planRecovery(game);
+    if (!this.ordered) {
+      if (this.cycle instanceof GridCycle && this.canCertifyRejoin(game)) {
+        const rejoin = this.certifyRejoin(game, this.cycle);
+        if (rejoin) return this.cacheRoute(game, rejoin, 'Rejoining the safe cycle');
+      }
+      return this.planRecovery(game);
+    }
     const chases: FoodRoute[] = [];
     // A simple chase uses at most F moves and, with L >= F, cannot
     // replace the old head. Under a zero-gap certificate its new suffix
@@ -141,23 +167,34 @@ export class AutoPlayer {
         const alternative = this.findFoodRoute(game, true, true);
         if (alternative) chases.push(alternative);
       }
-      this.retryChaseAt = game.steps + (game.length / game.capacity < .35 ? 6 : 32);
+      this.retryChaseAt = game.steps + (large && game.length > 256 ? 96 : game.length / game.capacity < .35 ? 6 : 32);
     }
     const food = game.food.values().next().value;
-    if (!chases.length && food && this.cycle instanceof TorusCycle && game.steps >= this.retryRewireAt
-      && this.cycle.distance(game.head, food) < this.cycle.distance(game.head, game.tail)) {
-      this.retryRewireAt = game.steps + Math.max(12, Math.ceil(game.capacity / 256));
-      let changed = false;
-      for (let edits = 0; edits < (large ? 1 : 4) && this.cycle.bringFoodForward(game.head, game.tail, food); edits++) changed = true;
-      if (changed) game.autoCycle = this.cycle.cells.slice();
-    }
+    if (!large && !chases.length && food) this.rewire(game, food);
     return this.planCoverage(game, chases);
+  }
+
+  private rewire(game: Game, food: Point) {
+    const cycle = this.cycle!;
+    if (game.steps < this.retryRewireAt || cycle.distance(game.head, food) >= cycle.distance(game.head, game.tail)) return false;
+    this.retryRewireAt = game.steps + Math.max(12, Math.ceil(game.capacity / 256));
+    if (cycle instanceof GridCycle && game.capacity <= 65_536 && game.length >= game.capacity * .45)
+      this.cycle = new TorusCycle(game.width, game.height, cycle, game.wraparound);
+    if (!(this.cycle instanceof TorusCycle)) return false;
+
+    const large = game.capacity >= 8192;
+    const dense = large && game.length >= game.capacity * .85;
+    const editLimit = dense ? 2 : large ? 1 : 4;
+    let changed = false;
+    for (let edits = 0; edits < editLimit && this.cycle.bringFoodForward(game.head, game.tail, food, dense); edits++) changed = true;
+    if (changed) game.autoCycle = this.cycle.cells.slice();
+    return changed;
   }
   private planCoverage(game: Game, candidates: FoodRoute[]): Move {
     const cycle = this.cycle!;
     const food = game.food.values().next().value;
-    const slack = this.gapBudget(game);
     const clearance = cycle.distance(game.head, game.tail);
+    const slack = this.gapBudget(game);
     const limit = food ? cycle.distance(game.head, food) : game.capacity;
     const shortcut = this.coverageShortcut(game, limit, clearance, slack);
     if (shortcut) {
@@ -169,27 +206,47 @@ export class AutoPlayer {
       }
     }
 
+    let partial: FoodRoute | undefined;
     if (food && game.capacity >= 8192) {
+      const chase = candidates.find(route => route.rejoin);
+      if (chase) {
+        // Restoring a compact body costs some movement after the bite.
+        const cost = chase.directions.length + chase.rejoin!.directions.length / (game.length > 256 ? 8 : 2);
+        if (cost < Math.min(limit, ...candidates.filter(route => route !== chase).map(route => route.directions.length))) {
+          return this.cacheRoute(game, chase, 'Chasing food');
+        }
+        candidates.splice(candidates.indexOf(chase), 1);
+      }
       const incumbent = Math.min(limit, ...candidates.map(route => route.directions.length));
       const directDistance = boardDistance(game, game.head, food);
       // Try the tail-aware route when the existing choices would still scan
       // a substantial arc relative to the distance to the food.
-      if (incumbent > Math.max(1024, directDistance * 2)) {
+      if (game.length < game.capacity * .85 && incumbent > Math.max(1024, directDistance * 2)) {
         const progress = this.planForwardShortcuts(game, limit, incumbent);
         if (progress) {
           if (progress.complete) candidates.push(progress.route);
-          else if (!candidates.length) return this.cacheRoute(game, progress.route, 'Taking a shortcut through the safe cycle');
+          else partial = progress.route;
         }
       }
+      const bestLength = Math.min(limit, ...candidates.map(route => route.directions.length));
+      if (bestLength > Math.max(64, directDistance * 2) && this.rewire(game, food)) {
+        return this.planCoverage(game, []);
+      }
+      if (partial && !candidates.length) return this.cacheRoute(game, partial, 'Taking a shortcut through the safe cycle');
     }
 
     const next = cycle.direction(game.head);
     const safe = game.canMove(next);
     if (food && safe && candidates.length) {
-      let best = candidates[0];
-      let bestCost = this.foodCost(game, best.cycleAfter ?? cycle, food, best);
-      for (const candidate of candidates.slice(1)) {
-        const cost = this.foodCost(game, candidate.cycleAfter ?? cycle, food, candidate);
+      const forecast = game.capacity >= 8192 && game.length > 256 && game.length < game.capacity * .85;
+      const cycleForecast = forecast ? this.forecastFoodCost(game, cycle, food, limit) : undefined;
+      const forecasts = cycleForecast !== undefined
+        ? candidates.map(route => this.forecastFoodCost(game, route.cycleAfter ?? cycle, food, route.directions.length, route))
+        : [];
+      const useForecast = forecasts.length > 0 && forecasts.every(cost => cost !== undefined);
+      let best = candidates[0], bestCost = Infinity;
+      for (const [index, candidate] of candidates.entries()) {
+        const cost = useForecast ? forecasts[index]! : this.foodCost(game, candidate.cycleAfter ?? cycle, food, candidate);
         if (cost < bestCost) {
           best = candidate;
           bestCost = cost;
@@ -197,7 +254,8 @@ export class AutoPlayer {
       }
       // Following the cycle all the way is another certified candidate, even
       // when food is in a gap and the tail must pass it first.
-      if (this.cycleFoodCost(game, cycle, food, limit) < bestCost) {
+      const cycleCost = useForecast ? cycleForecast! : this.cycleFoodCost(game, cycle, food, limit);
+      if (cycleCost < bestCost) {
         this.retryRewireAt = Math.max(this.retryRewireAt, game.steps + 12);
         this.coverageRoute = true;
         this.replanCycleAt = Infinity;
@@ -284,7 +342,9 @@ export class AutoPlayer {
         const point = game.next(current, move);
         if (!game.contains(point) || (step === 1 && !game.canMove(move))) continue;
         const advance = offset(point);
-        if (advance <= best || advance > limit || advance >= (advance === limit ? eatClearance : moveClearance)) continue;
+        const eats = advance === limit;
+        const clearance = eats ? eatClearance : moveClearance;
+        if (advance <= best || advance > limit || advance >= clearance) continue;
         best = advance;
         next = point;
         direction = move;
@@ -307,6 +367,37 @@ export class AutoPlayer {
     this.expected = key(game.head);
     this.phaseReason = reason;
     return { direction, safe: game.canMove(direction), reason };
+  }
+
+  private forecastFoodCost(game: Game, cycle: Cycle, food: Point, moves: number, route?: FoodRoute) {
+    const length = game.length + 1;
+    const retained = Math.max(0, length - moves);
+    const appended = length - retained;
+    const first = game.first + moves - 1;
+    const foodIndex = cycle.index(food);
+    const lastCells = route && new Set(route.points.slice(-appended).map(key));
+    const target = game.forecastFood(point => {
+      const cell = key(point);
+      if (retained && (game.occupied.get(cell) ?? -1) >= first) return true;
+      if (lastCells) return lastCells.has(cell);
+      return cycle.distance(point, food) < appended;
+    });
+    if (!target) return;
+    const at = (i: number) => i < retained ? game.segments.get(first + i)!
+      : route ? route.points[moves - length + i] : cycle.point((foodIndex - length + 1 + i + cycle.size) % cycle.size);
+    const tail = at(0);
+    const targetOffset = cycle.distance(tail, target);
+    const geometric = boardDistance(game, food, target);
+    if (targetOffset > cycle.distance(tail, food)) return moves + geometric / 2;
+    // Cells in the body arc are safe to enter once the tail has passed them.
+    // Discount this estimate because the next planner can find a different escape.
+    let low = 1, high = length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (cycle.distance(tail, at(middle)) <= targetOffset) low = middle + 1;
+      else high = middle;
+    }
+    return moves + Math.max(geometric, low) / 2;
   }
 
   private foodCost(game: Game, cycle: Cycle, food: Point, route: FoodRoute) {
@@ -374,6 +465,8 @@ export class AutoPlayer {
     this.expected = key(game.head);
     this.pathOrigin = game.head;
     this.cycleAfter = route.cycleAfter;
+    this.rejoin = route.rejoin;
+    if (route.rejoin || route.cycleAfter) this.ordered = undefined;
     return { direction: this.route[0], safe: true, reason };
   }
 
@@ -413,18 +506,23 @@ export class AutoPlayer {
   // Null means this search tree found the food, but its route failed the safety check.
   private findFoodRoute(game: Game, requireCycleOrder: boolean, turnLeftFirst = false): FoodRoute | null | undefined {
     if (game.capacity >= 8192) {
-      const food = game.food.values().next().value;
-      if (!food) return;
-      const path = searchRoute(game, game.head, food, this.searchBudget(game),
-        (_from, to) => !game.occupied.has(key(to)), game.direction);
-      if (!path) return;
-      const route = this.searchedRoute(path);
+      const routes = this.largeFoodRoutes(game);
+      const route = routes.next().value;
+      if (!route) return;
       if (this.safeFoodRoute(game, route, requireCycleOrder)) return route;
-      // A long chase replaces the entire old body. If its new suffix fits the
-      // reverse cycle, we can switch direction safely once it reaches food.
-      if (requireCycleOrder && this.cycle instanceof GridCycle && route.points.length > game.length) {
-        const reversed = this.cycle.reversed();
-        if (this.safeFoodRoute(game, route, true, reversed)) return { ...route, cycleAfter: reversed };
+      const cycle = this.cycle;
+      // A long chase can reach a reverse cycle directly once the old body is gone.
+      if (requireCycleOrder && cycle instanceof GridCycle) {
+        if (route.points.length > game.length) {
+          const reverse = cycle.reversed();
+          if (this.safeFoodRoute(game, route, true, reverse)) return { ...route, cycleAfter: reverse };
+        }
+        if (this.canCertifyRejoin(game)) {
+          const budget = this.rejoinBudget(game);
+          const rejoin = this.certifyRejoin(game, cycle, route, budget);
+          if (rejoin) return { ...route, rejoin };
+          if (game.length > 256) return this.certifiedChase(game, cycle, route.points.length + 32, routes, budget) ?? null;
+        }
       }
       return null;
     }
@@ -449,6 +547,101 @@ export class AutoPlayer {
       }
     }
   }
+  private canCertifyRejoin(game: Game) {
+    return game.length <= Math.min(8192, game.capacity * .15);
+  }
+
+  private *largeFoodRoutes(game: Game): Generator<FoodRoute, void> {
+    const food = game.food.values().next().value;
+    if (!food) return;
+    for (const path of routeCandidates(game, game.head, food, this.searchBudget(game),
+      (_from, to, steps) => (game.occupied.get(key(to)) ?? -1) < game.first + steps, game.direction)) {
+      yield this.searchedRoute(path);
+    }
+  }
+
+  private certifiedChase(game: Game, cycle: GridCycle, before: number,
+    routes = this.largeFoodRoutes(game), budget = this.rejoinBudget(game)) {
+    let candidates = 0;
+    for (const route of routes) {
+      if (route.directions.length >= before || ++candidates > 2 || budget.remaining <= 0) break;
+      const rejoin = this.certifyRejoin(game, cycle, route, budget);
+      if (rejoin) return { ...route, rejoin };
+    }
+  }
+
+  private rejoinBudget(game: Game): SimulationBudget {
+    return { remaining: Math.max(1024, Math.ceil(game.length * 2.5)) };
+  }
+
+  private certifyRejoin(game: Game, cycle: GridCycle, chase?: FoodRoute, budget = this.rejoinBudget(game)): FoodRoute | undefined {
+    const orientations = [cycle, cycle.reversed()];
+    if (game.wraparound && game.length > 256) {
+      const transposed = cycle.transposed();
+      orientations.push(transposed, transposed.reversed());
+    }
+    // Use the real spawn sequence in the fork. This keeps the escape valid
+    // even if it eats another food before returning to cycle order.
+    const afterChase = game.forkForPlanning();
+    if (chase && !chase.directions.every(direction => afterChase.canMove(direction) && afterChase.step(direction))) return;
+    for (const [index, candidate] of orientations.entries()) {
+      if (budget.remaining <= 0) break;
+      const simulated = index + 1 === orientations.length ? afterChase : afterChase.forkForPlanning();
+      const directions: Direction[] = [];
+      const points: Point[] = [];
+      let span = 0, previous = simulated.tail;
+      for (let i = simulated.first + 1; i < simulated.last; i++) {
+        const point = simulated.segment(i)!;
+        span += candidate.distance(previous, point);
+        previous = point;
+      }
+      let detours = simulated.length > 256 ? 16 : 0;
+      const limit = simulated.length + (detours ? 512 : 8);
+      for (let i = 0; i < limit && budget.remaining > 0; i++) {
+        budget.remaining--;
+        const head = simulated.head;
+        let direction = candidate.direction(head);
+        if (!simulated.canMove(direction)) {
+          if (!detours) break;
+          detours--;
+          const alternative = this.escapeTurn(simulated, candidate);
+          if (alternative === undefined) break;
+          direction = alternative;
+        }
+        const first = simulated.first;
+        const releasedEdge = candidate.distance(simulated.tail, simulated.segment(first + 1) ?? simulated.tail);
+        if (!simulated.step(direction)) break;
+        span += candidate.distance(head, simulated.head) - (simulated.first === first ? 0 : releasedEdge);
+        directions.push(direction);
+        points.push(simulated.head);
+        if (span < candidate.size || simulated.won)
+          return { directions, points, coverage: false, cycleAfter: candidate };
+      }
+    }
+  }
+
+  private escapeTurn(game: Game, cycle: GridCycle) {
+    let best: Direction | undefined;
+    let longest = -1;
+    for (let d = 0; d < 4; d++) {
+      const direction = d as Direction;
+      if (!game.canMove(direction)) continue;
+      const point = game.next(game.head, direction);
+      const start = cycle.index(point);
+      let room = 0;
+      for (let step = 1; step <= 16; step++) {
+        const p = cycle.point((start + step) % cycle.size);
+        if (game.isOccupied(p)) break;
+        room++;
+      }
+      if (room > longest) {
+        best = direction;
+        longest = room;
+      }
+    }
+    return best;
+  }
+
   private planRecovery(game: Game): Move {
     const route = this.findFoodRoute(game, false);
     if (route) return this.cacheRoute(game, route, 'Keeping a route to the tail');
@@ -466,8 +659,17 @@ export class AutoPlayer {
     this.cursor++;
     this.cycleRemaining = Math.max(0, this.cycleRemaining - 1);
     this.expected = key(game.head);
+    if (this.cursor === this.route.length && this.cycleAfter) {
+      this.cycle = this.cycleAfter;
+      this.ordered = true;
+    }
     if (game.score !== game.scores[game.steps - 1]) {
-      if (this.cycleAfter && this.cursor === this.route.length) this.cycle = this.cycleAfter;
+      if (this.cursor === this.route.length && this.rejoin) {
+        this.cursor = 0;
+        this.cacheRoute(game, this.rejoin, 'Rejoining the safe cycle');
+      }
+      this.retryRejoinAt = this.cycleAfter && this.cursor < this.route.length && game.length > 256 && this.canCertifyRejoin(game)
+        ? game.steps : Infinity;
       this.retryChaseAt = 0;
       this.retryRewireAt = 0;
       this.cycleRemaining = 0;

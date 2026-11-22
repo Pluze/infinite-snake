@@ -7,19 +7,27 @@ export class GridCycle {
   private readonly columnsFirst: boolean;
   private readonly rows: number;
   private readonly insertion: number;
+  private readonly width: number;
+  private readonly height: number;
 
-  constructor(private readonly width: number, private readonly height: number, private readonly wraparound: boolean, private readonly reverse = false) {
-    this.size = width * height;
-    this.columnsFirst = !wraparound && height % 2 === 1;
-    this.rows = height - Number(wraparound && height % 2 === 1);
+  constructor(
+    private readonly boardWidth: number, private readonly boardHeight: number, private readonly wraparound: boolean,
+    private readonly reverse = false, private readonly swapAxes = false,
+  ) {
+    this.width = swapAxes ? boardHeight : boardWidth;
+    this.height = swapAxes ? boardWidth : boardHeight;
+    this.size = this.width * this.height;
+    this.columnsFirst = !wraparound && this.height % 2 === 1;
+    this.rows = this.height - Number(wraparound && this.height % 2 === 1);
     // On an odd torus, splice the last row into the bottom edge of the even rectangle.
-    this.insertion = this.rows === height ? this.size : width + (this.rows - 2) * (width - 1) + 1;
+    this.insertion = this.rows === this.height ? this.size : this.width + (this.rows - 2) * (this.width - 1) + 1;
   }
 
-  reversed() { return new GridCycle(this.width, this.height, this.wraparound, !this.reverse); }
+  reversed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, !this.reverse, this.swapAxes); }
+  transposed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, this.reverse, !this.swapAxes); }
 
   index(p: Point) {
-    const index = this.forwardIndex(p);
+    const index = this.forwardIndex(this.swapAxes ? { x: p.y, y: p.x } : p);
     return this.reverse && index ? this.size - index : index;
   }
 
@@ -38,7 +46,11 @@ export class GridCycle {
   }
 
   point(index: number): Point {
-    if (this.reverse && index) index = this.size - index;
+    const p = this.forwardPoint(this.reverse && index ? this.size - index : index);
+    return this.swapAxes ? { x: p.y, y: p.x } : p;
+  }
+
+  private forwardPoint(index: number): Point {
     if (index < this.width) return { x: index, y: 0 };
     if (this.columnsFirst) {
       const column = Math.floor((index - this.width) / (this.height - 1));

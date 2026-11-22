@@ -6,7 +6,7 @@ async function step(page:Page){await more(page);await page.locator('#step').clic
 test('left toolbar, right controls and both desktop charts stay available',async({page})=>{
  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('/');await expect(page.locator('#loading')).toBeHidden();
  await expect(page.locator('#growth-chart')).toBeVisible();await expect(page.locator('#efficiency-chart')).toBeVisible();await expect(page.locator('#speed')).toBeVisible();await expect(page.locator('.dpad')).toBeHidden();
- expect((await page.locator('#control-panel').boundingBox())!.x).toBeGreaterThan(1000);await expect(page.locator('#mode-manual')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#speed')).toHaveAttribute('max','9');
+ expect((await page.locator('#control-panel').boundingBox())!.x).toBeGreaterThan(1000);await expect(page.locator('#mode-manual')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#speed')).toHaveAttribute('max','9');await expect(page.locator('#follow')).not.toBeChecked();await expect(page.locator('#risk')).toBeChecked();
  await page.locator('#speed').fill('0');await page.locator('#board').focus();await page.keyboard.press('ArrowUp');await expect(page.locator('#play')).toHaveAttribute('aria-pressed','true');await expect(page.locator('#board')).toHaveAttribute('data-position','5, 47');await page.keyboard.press('Space');
  const steps=await page.locator('#board').getAttribute('data-steps');await page.waitForTimeout(1100);await expect(page.locator('#board')).toHaveAttribute('data-steps',steps!);await expect(page.locator('#save-status')).toContainText('Saved');
  await page.reload();await expect(page.locator('#loading')).toBeHidden();await expect(page.locator('#board')).toHaveAttribute('data-position','5, 47');expect(errors).toEqual([]);await page.screenshot({path:'test-results/manual.png'});
@@ -37,7 +37,7 @@ test('risk assist and single-step control still work; recenter is contextual',as
  await page.addInitScript(() => { Math.random = () => 42 / 2147483647; });
  await page.goto('/');await expect(page.locator('#loading')).toBeHidden();await page.locator('#speed').fill('0');await page.locator('#risk').check();await step(page);
  for(const direction of ['ArrowDown','ArrowLeft']){await page.keyboard.press(direction);await page.keyboard.press('Space');await step(page);}
- await page.keyboard.press('ArrowUp');await page.keyboard.press('Space');await step(page);await expect(page.locator('#status')).toContainText('Risk pause');await expect(page.locator('#board')).toHaveAttribute('data-steps','3');await page.locator('#risk').uncheck();await step(page);await expect(page.locator('#status')).toContainText('You hit');await expect(page.locator('#play')).toBeDisabled();
+ await page.keyboard.press('ArrowUp');await page.keyboard.press('Space');await step(page);await expect(page.locator('#status')).toContainText('Risk pause');await expect(page.locator('#board')).toHaveAttribute('data-steps','3');await page.locator('#risk').uncheck();await step(page);await expect(page.locator('#status')).toContainText('You hit');await expect(page.locator('#play')).toBeEnabled();
  await page.mouse.move(600,350);await page.mouse.down();await page.mouse.move(800,400);await page.mouse.up();await expect(page.locator('#recenter')).toBeVisible();await page.locator('#recenter').click();await expect(page.locator('#camera-status')).toHaveText('Following');await expect(page.locator('#recenter')).toBeHidden();
 });
 test('small vertical wheel deltas zoom the board', async ({ page }) => {
@@ -76,11 +76,20 @@ test('a walled board draws one period, saves its rules and stops at the wall', a
   await expect.poll(() => board.evaluate((canvas: HTMLCanvasElement) =>
     [...canvas.getContext('2d')!.getImageData(300, 400, 1, 1).data]
   )).toEqual([8, 14, 11, 255]);
+  await page.locator('#speed').fill('0');
+  await page.locator('#risk').uncheck();
   await board.focus();
   await page.keyboard.press('ArrowUp');
   await expect(page.locator('#status')).toContainText('You hit a wall');
   await expect(board).toHaveAttribute('data-position', '5, 0');
   await page.screenshot({ path: 'test-results/walled-board.png' });
+  await page.getByRole('button', { name: 'Play again', exact: true }).click();
+  await expect(page.locator('#play')).toHaveText('Start');
+  await expect(board).toHaveAttribute('data-steps', '0');
+  await expect(page.locator('#world-caption')).toHaveText('8 × 8 · solid walls');
+  await expect(page.locator('#risk')).not.toBeChecked();
+  await expect(page.locator('#speed')).toHaveValue('0');
+  await expect(page.locator('#restart-dialog')).not.toBeVisible();
 });
 
 test('custom dimensions accept both endpoints', async ({ page }) => {
@@ -124,7 +133,7 @@ test('draws the route and highlights food past the old preview cutoff', async ({
       if (ctx.strokeStyle === '#f7c795') foodOutline = true;
       strokeRect(x, y, w, h);
     };
-    const capture = (game: InstanceType<typeof Game>) => {
+    const capture = (game: InstanceType<typeof Game>, showPrefix = false) => {
       const food = game.food.values().next().value!;
       renderer.x = food.x;
       renderer.y = food.y;
@@ -132,6 +141,11 @@ test('draws the route and highlights food past the old preview cutoff', async ({
       edges = 0;
       foodOutline = false;
       renderer.render(game, plan, true, false, true);
+      if (showPrefix) {
+        renderer.x = game.head.x;
+        renderer.y = game.head.y;
+        renderer.render(game, plan, true, false, true);
+      }
       return { edges: edges > 0, foodOutline, cycle: Boolean(plan.path && 'cycle' in plan.path) };
     };
 
@@ -145,10 +159,30 @@ test('draws the route and highlights food past the old preview cutoff', async ({
     const food = cycle.point(65_000);
     const restored = Game.restore({ ...dense.snapshot(), body, food: [food], travel: body[body.length - 1],
       direction: cycle.direction(body[body.length - 2]) }, [0]);
-    return { sparse: capture(sparse), dense: capture(restored) };
+    return { sparse: capture(sparse), dense: capture(restored, true) };
   });
   expect(result).toEqual({
     sparse: { edges: true, foodOutline: true, cycle: false },
     dense: { edges: true, foodOutline: true, cycle: true },
   });
+});
+
+test('camera zoom goes far beyond the old limits in both directions', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await more(page);
+  const zoom = page.locator('#zoom-label');
+  await page.locator('#zoom-out').evaluate(button => {
+    for (let i = 0; i < 60; i++) (button as HTMLButtonElement).click();
+  });
+  expect(parseFloat((await zoom.textContent())!)).toBeLessThan(.01);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.locator('#zoom-in').evaluate(button => {
+    for (let i = 0; i < 100; i++) (button as HTMLButtonElement).click();
+  });
+  expect(parseFloat((await zoom.textContent())!)).toBeGreaterThan(10_000);
+  await expect(page.locator('#follow')).not.toBeChecked();
+  expect(errors).toEqual([]);
 });

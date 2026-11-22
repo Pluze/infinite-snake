@@ -10,12 +10,21 @@ export function boardDistance(game: Game, a: Point, b: Point) {
   return game.wraparound ? Math.min(dx, game.width - dx) + Math.min(dy, game.height - dy) : dx + dy;
 }
 
-/** Bounded A* with sparse storage, including on boards with millions of cells. */
 export function searchRoute(
   game: Game, start: Point, target: Point, budget: number,
   canVisit: (from: Point, to: Point, steps: number) => boolean,
   startDirection?: Direction,
 ): RouteNode[] | undefined {
+  const result = routeCandidates(game, start, target, budget, canVisit, startDirection).next();
+  return result.done === false ? result.value : undefined;
+}
+
+/** Bounded A* with sparse storage, including on boards with millions of cells. */
+export function* routeCandidates(
+  game: Game, start: Point, target: Point, budget: number,
+  canVisit: (from: Point, to: Point, steps: number) => boolean,
+  startDirection?: Direction,
+): Generator<RouteNode[], void> {
   const id = (p: Point) => p.y * game.width + p.x;
   const left = boardDistance(game, start, target);
   const nodes: SearchNode[] = [{ p: start, id: id(start), d: startDirection ?? 0, parent: -1, steps: 0, left, cost: left }];
@@ -40,7 +49,8 @@ export function searchRoute(
     if (current.left === 0) {
       const route: RouteNode[] = [];
       for (let i = index; i >= 0; i = nodes[i].parent) route.push(nodes[i]);
-      return route.reverse();
+      yield route.reverse();
+      continue;
     }
     expanded++;
     for (let turn = 0; turn < 4; turn++) {
@@ -48,10 +58,12 @@ export function searchRoute(
       if (index === 0 && startDirection !== undefined && !game.canMove(d)) continue;
       const p = game.next(current.p, d);
       if (!game.contains(p)) continue;
-      const cell = id(p), steps = current.steps + 1;
+      const left = boardDistance(game, p, target);
+      // Distinct final headings can leave very different escape routes.
+      const cell = left === 0 ? game.capacity + d : id(p);
+      const steps = current.steps + 1;
       const previous = best.get(cell);
       if ((previous !== undefined && nodes[previous].steps <= steps) || !canVisit(current.p, p, steps)) continue;
-      const left = boardDistance(game, p, target);
       const next = { p, id: cell, parent: index, d, steps, left, cost: steps + left };
       const nextIndex = nodes.push(next) - 1;
       best.set(cell, nextIndex);

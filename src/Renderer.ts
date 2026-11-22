@@ -4,7 +4,13 @@ import { SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private snakeSprites = new SnakeSprites();
-  x = 0; y = 0; scale = 24; follow = true; autozoom = true; manualUntil = 0;
+  private overview = document.createElement('canvas');
+  private overviewPattern: CanvasPattern | null = null;
+  private overviewGame?: Game;
+  private overviewStep = -1;
+  private overviewOverlay = false;
+  private overviewAt = -Infinity;
+  x = 0; y = 0; scale = 24; follow = false; autozoom = true; manualUntil = 0;
   width = 0; height = 0;
   private last = performance.now();
   onCameraChange = () => {};
@@ -59,12 +65,20 @@ export class Renderer {
   }
   private hold() { this.manualUntil = performance.now() + 4500; this.onCameraChange(); }
   zoom(factor: number, sx = this.width / 2, sy = this.height / 2) {
-    const old = this.scale; this.scale = Math.min(56, Math.max(5, this.scale * factor));
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    // Stay within a range where camera coordinates retain sub-cell precision.
+    const old = this.scale;
+    this.scale = Math.min(2 ** 40, Math.max(2 ** -40, this.scale * factor));
     this.x += (sx - this.width / 2) * (1 / old - 1 / this.scale);
     this.y += (sy - this.height / 2) * (1 / old - 1 / this.scale);
     this.autozoom = false; this.hold();
   }
-  recenter(game: Game, immediate = false) { this.follow = true; this.manualUntil = 0; if (immediate) { this.x = game.travel.x; this.y = game.travel.y; } this.onCameraChange(); }
+  recenter(game: Game, immediate = false) {
+    if (immediate) { this.x = game.travel.x; this.y = game.travel.y; }
+    else this.follow = true;
+    this.manualUntil = 0;
+    this.onCameraChange();
+  }
   render(game: Game, plan: Plan, overlay: boolean, running: boolean, auto: boolean) {
     const now = performance.now(), dt = Math.min((now - this.last) / 1000, .1); this.last = now;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -95,6 +109,10 @@ export class Renderer {
     }
     const ctx = this.ctx, s = this.scale, w = this.width, h = this.height;
     ctx.fillStyle = game.wraparound ? '#101915' : '#080e0b'; ctx.fillRect(0, 0, w, h);
+    if (s < 3 || (game.wraparound && Math.min(game.width, game.height) * s < 8)) {
+      this.drawOverview(game, overlay ? plan : undefined, now);
+      return;
+    }
     const screen = (x: number, y: number) => ({ x: (x - this.x) * s + w / 2, y: (y - this.y) * s + h / 2 });
     const left = Math.floor(this.x - w / s / 2) - 1, right = Math.ceil(this.x + w / s / 2) + 1;
     const top = Math.floor(this.y - h / s / 2) - 1, bottom = Math.ceil(this.y + h / s / 2) + 1;
@@ -233,4 +251,60 @@ export class Renderer {
     }
 
   }
+  private drawOverview(game: Game, plan: Plan | undefined, now: number) {
+    const ctx = this.ctx;
+    const width = game.width * this.scale, height = game.height * this.scale;
+    const left = this.width / 2 - (this.x + .5) * this.scale;
+    const top = this.height / 2 - (this.y + .5) * this.scale;
+    if (game.wraparound && width < 1 && height < 1) {
+      // Repeated cells below a pixel on both axes are represented by density.
+      ctx.fillStyle = `rgba(104, 201, 148, ${game.length / game.capacity * .45})`;
+      ctx.fillRect(0, 0, this.width, this.height);
+      return;
+    }
+    const tile = this.overview;
+    const showPath = Boolean(plan?.path);
+    const newGame = this.overviewGame !== game;
+    if (newGame || this.overviewOverlay !== showPath || (this.overviewStep !== game.steps && now - this.overviewAt > 40)) {
+      this.overviewGame = game;
+      this.overviewOverlay = showPath;
+      this.overviewStep = game.steps;
+      this.overviewAt = now;
+      if (newGame) {
+        tile.width = Math.min(512, game.width);
+        tile.height = Math.min(512, game.height);
+      }
+      const raster = tile.getContext('2d')!;
+      raster.fillStyle = '#101915';
+      raster.fillRect(0, 0, tile.width, tile.height);
+      const plot = (p: Point) => raster.fillRect(Math.floor(p.x * tile.width / game.width),
+        Math.floor(p.y * tile.height / game.height), 1, 1);
+      const path = plan?.path;
+      raster.fillStyle = '#466647';
+      if (path && 'cycle' in path) {
+        const start = path.cycle.index(game.head);
+        const stride = Math.max(1, Math.ceil(path.length / 16_384));
+        for (let i = 0; i < path.length; i += stride) plot(path.cycle.point((start + i) % path.cycle.size));
+      } else if (path) {
+        for (let i = path.cursor; i < path.points.length; i++) plot(path.points[i]);
+      }
+      raster.fillStyle = '#68c994';
+      const stride = Math.max(1, Math.ceil(game.length / 32_768));
+      for (let i = game.first; i < game.last; i += stride) plot(game.segments.get(i)!);
+      plot(game.head);
+      raster.fillStyle = '#f4b37c';
+      for (const food of game.food.values()) plot(food);
+      this.overviewPattern = game.wraparound ? ctx.createPattern(tile, 'repeat') : null;
+    }
+    const pattern = this.overviewPattern;
+    if (pattern) {
+      const x = width < 1 ? 0 : left % width, y = height < 1 ? 0 : top % height;
+      pattern.setTransform(new DOMMatrix([Math.max(1, width) / tile.width, 0, 0, Math.max(1, height) / tile.height, x, y]));
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, this.width, this.height);
+    } else if (!game.wraparound && width >= .5 && height >= .5) {
+      ctx.drawImage(tile, left, top, width, height);
+    }
+  }
+
 }

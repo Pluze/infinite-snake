@@ -12,7 +12,7 @@ it('indexes a closed, adjacent cycle on even and odd boards in both orientations
     const game = new Game(42, width, height, wraparound);
     const forward = new GridCycle(width, height, wraparound);
     expect(forward.ordered(game.body())).toBe(true);
-    for (const cycle of [forward, forward.reversed()]) {
+    for (const cycle of [forward, forward.reversed(), forward.transposed(), forward.transposed().reversed()]) {
       for (let i = 0; i < cycle.size; i++) {
         const point = cycle.point(i);
         expect(game.contains(point)).toBe(true);
@@ -66,5 +66,46 @@ it('skips long row scans on sparse and half-full 256 by 256 boards', () => {
     }
     expect(restored.score).toBe(10);
     expect(cycle.ordered(restored.body())).toBe(true);
+  }
+});
+
+it('uses short re-planned chases when a large body blocks the indexed cycle', () => {
+  const game = new Game(91, 256, 256);
+  const cycle = new GridCycle(game.width, game.height, true);
+  const end = game.seed * 157 % game.capacity;
+  const length = Math.floor(game.capacity * .08);
+  const body = Array.from({ length }, (_, i) => cycle.point((end - length + 1 + i + cycle.size) % cycle.size));
+  const restored = Game.restore({
+    ...game.snapshot(), body, food: [], travel: body[length - 1], direction: cycle.direction(body[length - 2]),
+  }, [0]);
+  const bot = new AutoPlayer();
+  while (restored.score < 160 && restored.steps < 36_000) {
+    const move = bot.nextMove(restored);
+    if (!move.safe || move.direction === undefined || !restored.step(move.direction)) throw Error('Autoplay lost its safe route');
+    bot.advance(restored);
+  }
+  expect(restored.score).toBe(160);
+});
+
+it('fills a nearly full board after saving and resuming autoplay', () => {
+  for (const wraparound of [true, false]) {
+    let game = new Game(42, 256, 256, wraparound);
+    const cycle = new GridCycle(game.width, game.height, wraparound);
+    const body = Array.from({ length: game.capacity - 65 }, (_, i) => cycle.point(i));
+    game = Game.restore({
+      ...game.snapshot(), body, food: [], travel: body[body.length - 1], direction: cycle.direction(body[body.length - 2]),
+    }, [0]);
+    let bot = new AutoPlayer();
+    while (!game.won && game.steps < 2400) {
+      const move = bot.nextMove(game);
+      if (!move.safe || move.direction === undefined || !game.step(move.direction)) throw Error('Autoplay lost its safe route');
+      bot.advance(game);
+      if (game.score === 100 && game.score !== game.scores[game.steps - 1]) {
+        game = Game.restore(game.snapshot(), [...game.scores]);
+        bot = new AutoPlayer();
+      }
+    }
+    expect(game.won).toBe(true);
+    expect(game.length).toBe(game.capacity);
   }
 });
