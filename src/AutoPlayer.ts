@@ -345,11 +345,17 @@ export class AutoPlayer {
       this.cycle = new TorusCycle(game.width, game.height, cycle, game.wraparound);
     if (!(this.cycle instanceof TorusCycle)) return false;
 
-    const large = useAdaptiveSearch(game);
-    const dense = large && game.length >= game.capacity * .85;
-    const editLimit = dense ? 2 : large ? 1 : 4;
+    const lowerBound = boardDistance(game, game.head, food);
+    const clearance = this.cycle.distance(game.head, game.tail);
+    // Charge each sweep by the length of the free arc. Dense boards can
+    // explore more edits while the worst-case work stays bounded per replan.
+    let workLeft = 3 * this.cycle.size;
     let changed = false;
-    for (let edits = 0; edits < editLimit && this.cycle.bringFoodForward(game.head, game.tail, food, dense); edits++) changed = true;
+    while (workLeft >= clearance && this.cycle.distance(game.head, food) > lowerBound) {
+      if (!this.cycle.bringFoodForward(game.head, game.tail, food)) break;
+      workLeft -= clearance;
+      changed = true;
+    }
     if (changed) game.autoCycle = this.cycle.cells.slice();
     return changed;
   }

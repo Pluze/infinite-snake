@@ -25,6 +25,7 @@ export function cycleOrder(cycle: Pick<Cycle, 'size' | 'distance'>, body: Iterab
 export class TorusCycle {
   readonly cells: Point[] = [];
   private order: Int32Array;
+  private cutCosts?: { span: Int32Array; endAt: Int32Array };
   constructor(readonly width: number, readonly height: number, saved?: Point[] | Cycle, private readonly wraparound = true) {
     const size = width * height;
     this.order = new Int32Array(size).fill(-1);
@@ -163,80 +164,85 @@ export class TorusCycle {
       || (dy === 0 && (dx === 1 || (this.wraparound && dx === this.width - 1)));
   }
 
-  bringFoodForward(head: Point, tail: Point, food: Point, dense = false) {
-    const size = this.cells.length;
-    const start = this.index(head);
+  bringFoodForward(head: Point, tail: Point, food: Point) {
+    const size = this.size, start = this.index(head);
     const at = (offset: number) => this.cells[(start + offset) % size];
-    const distance = this.distance(head, food);
-    const clearance = this.distance(head, tail);
-    if (distance < 5 || distance >= clearance) return false;
+    const distance = this.distance(head, food), clearance = this.distance(head, tail);
+    if (distance >= clearance || distance < 2) return false;
 
-    // Swapping two pairs of neighboring edges first splits off a loop, then
-    // inserts it earlier in the free arc. No part of the body arc changes.
-    const swaps: [number, number][] = [];
-    let bestDistance = distance - 3;
-    let reversal: [number, number] | undefined;
-    const scanLimit = Math.min(clearance - 1, dense ? 10_000 : 4096);
-    for (let i = 0; i < scanLimit; i++) {
-      const next = at(i + 1);
+    // A cut (i,j) splits off the arc i+1..j. For a second cut (k,l)
+    // with k<i<l<j the reconnected order is [l+1..j][i+1..l][k+1..i].
+    // Sweep k backwards so every stored outer cut already satisfies i>k.
+    let best = distance;
+    let edit: [number, number] | [number, number, number, number] | undefined;
+    let nearestStart = -1, nearestEnd = -1;
+    // For l >= distance we need min(j-i) over j>l. A prefix-minimum
+    // Fenwick tree on the reversed endpoint supplies the optimal predecessor.
+    const count = clearance - distance;
+    if (!this.cutCosts || this.cutCosts.span.length <= count) {
+      this.cutCosts = { span: new Int32Array(count + 1), endAt: new Int32Array(count + 1) };
+    } else {
+      this.cutCosts.span.fill(0, 1, count + 1);
+    }
+    const { span, endAt } = this.cutCosts;
+    const pending: number[] = [];
+    for (let k = distance - 1; k >= 0; k--) {
+      const next = at(k + 1), here = at(k);
+      pending.length = 0;
       for (const v of vectors) {
-        let x = next.x + v.x;
-        let y = next.y + v.y;
+        let x = next.x + v.x, y = next.y + v.y;
         if (this.wraparound) {
-          x = (x + this.width) % this.width;
-          y = (y + this.height) % this.height;
+          x = (x + this.width) % this.width; y = (y + this.height) % this.height;
         } else if (x < 0 || y < 0 || x >= this.width || y >= this.height) continue;
-        const j = (this.order[y * this.width + x] - start + size) % size;
-        if (j > i + 1 && j < clearance && this.adjacent(at(i), at(j + 1))) swaps.push([i, j]);
-        const endpoint = j - 1;
-        if (dense && i < distance && endpoint >= distance && j <= clearance
-          && this.adjacent(at(i), at(endpoint))) {
-          const newDistance = i + 1 + endpoint - distance;
-          if (newDistance < bestDistance) {
-            bestDistance = newDistance;
-            reversal = [i + 1, endpoint];
+        const l = (this.order[y * this.width + x] - start + size) % size;
+        if (l <= k + 1 || l > clearance) continue;
+        if (l > distance && k + l - distance < best && this.adjacent(here, at(l - 1))) {
+          best = k + l - distance;
+          edit = [k + 1, l - 1];
+        }
+        if (l === clearance || !this.adjacent(here, at(l + 1))) continue;
+        if (l < distance) {
+          const cost = distance - l + k;
+          if (nearestStart >= 0 && nearestStart < l && cost < best) {
+            best = cost; edit = [k, nearestStart, l, nearestEnd];
           }
+        } else {
+          for (let q = clearance - l - 1; q > 0; q -= q & -q) {
+            const cost = distance + k - l + span[q];
+            if (span[q] && cost < best) {
+              best = cost; edit = [k, endAt[q] - span[q], l, endAt[q]];
+            }
+          }
+          pending.push(l);
+        }
+      }
+      for (const j of pending) {
+        nearestStart = k; nearestEnd = j;
+        for (let q = clearance - j; q <= count; q += q & -q) {
+          if (!span[q] || j - k < span[q]) { span[q] = j - k; endAt[q] = j; }
         }
       }
     }
-    let attempts = 0;
-    let best: [number, number, number, number] | undefined;
-    for (const [i, j] of swaps) {
-      if (i <= 0 || i >= distance || j < distance) continue;
-      for (const [k, l] of swaps) {
-        if (k >= bestDistance || k >= i || ++attempts > 60_000) break;
-        if (l <= i || l >= j) continue;
-        const newDistance = distance > l ? k + distance - l : k + j - l + distance - i;
-        if (newDistance < bestDistance) {
-          bestDistance = newDistance;
-          best = [i, j, k, l];
-        }
-      }
-      if (attempts > 60_000) break;
-    }
-    if (!best && !reversal) return false;
-    const [i, j, k, l] = best ?? [0, 0, 0, 0];
+    if (!edit) return false;
     const reordered: Point[] = [];
-    const append = (first: number, last: number) => {
-      for (let offset = first; offset <= last; offset++) reordered.push(at(offset));
-    };
-    let firstChanged = k + 1;
-    if (best) {
-      append(l + 1, j);
-      append(i + 1, l);
-      append(k + 1, i);
-    } else if (reversal) {
-      const [first, last] = reversal;
-      firstChanged = first;
-      for (let offset = last; offset >= first; offset--) reordered.push(at(offset));
+    let firstChanged: number;
+    if (edit.length === 2) {
+      const [from, to] = edit;
+      firstChanged = from;
+      for (let i = to; i >= from; i--) reordered.push(at(i));
+    } else {
+      const [k, i, l, j] = edit;
+      firstChanged = k + 1;
+      for (let n = l + 1; n <= j; n++) reordered.push(at(n));
+      for (let n = i + 1; n <= l; n++) reordered.push(at(n));
+      for (let n = k + 1; n <= i; n++) reordered.push(at(n));
     }
-    reordered.forEach((point, index) => {
-      const position = (start + firstChanged + index) % size;
+    reordered.forEach((point, i) => {
+      const position = (start + firstChanged + i) % size;
       this.cells[position] = point;
       this.order[point.y * this.width + point.x] = position;
     });
     return true;
   }
-
   ordered(body: Iterable<Point>) { return cycleOrder(this, body); }
 }

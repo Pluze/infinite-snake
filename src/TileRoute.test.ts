@@ -31,6 +31,21 @@ it('completes games using only certified tile routes', () => {
   }
 });
 
+it('chooses a seven-step branch across a walled board', () => {
+  const initial = new Game(6, 8, 6, false);
+  const cycle = new GridCycle(8, 6, false);
+  const body = Array.from({ length: 15 }, (_, i) => cycle.point(30 + i));
+  const food = { x: 6, y: 3 };
+  const game = Game.restore({ ...initial.snapshot(), body, food: [food], travel: body[14],
+    direction: cycle.direction(body[13]) }, [0]);
+  const route = tileRoute(game);
+  if (!route) throw Error('Expected a certified food route');
+  const minimum = Math.abs(game.head.x - food.x) + Math.abs(game.head.y - food.y);
+  expect(route.directions.length).toBe(minimum);
+  for (const d of route.directions) expect(game.step(d)).toBe(true);
+  expect(game.score).toBe(10);
+});
+
 it('predicts the exact release tick of the old body across a torus seam', () => {
   let verified = 0, rejected = 0, grew = false;
   for (const seed of [7, 42, 91, 113, 999]) {

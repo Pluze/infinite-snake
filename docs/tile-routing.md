@@ -2,7 +2,7 @@
 
 The previous planner could take shortcuts on an indexed cycle. On a half-full 256 x 256 board that still left waits of more than 55,000 moves. This version can replace the cycle around the body. Each 2 x 2 tile starts as a closed loop. Joining two components exchanges two facing edges for two crossings. A spanning tree of joins gives one closed, adjacent cycle covering every cell. Body edges constrain which joins are required or forbidden.
 
-The planner tries a short chase and checks whether the resulting body still fits a spanning cycle. When it needs a new route, it connects the food to the body tree, considering both the distance from the head to the attachment and the number of tiles to the food. It attaches other components outside that arc when possible. If it relies on the tail moving, it checks the arrival time on each released cell. Longer routes are reconsidered after the tail advances. On a wrapped board, an older body can first follow a translated cycle after checking the release time of every occupied cell and any intervening food spawns.
+The planner tries a short chase and checks whether the resulting body still fits a spanning cycle. When it needs a new route, it connects the food to the body tree, pricing the walk from the head to the attachment and then from the landing corner to the food. It attaches other components outside that arc when possible. If it relies on the tail moving, it checks the arrival time on each released cell. Longer routes are reconsidered after the tail advances. On a wrapped board, an older body can first follow a translated cycle after checking the release time of every occupied cell and any intervening food spawns.
 
 The tile planner runs on even-sided boards with both sides at least four and between 4,096 and 65,536 cells. Other shapes and larger boards use the previous planner. The spanning-tree family and bounded search do not exhaust all legal snake paths.
 
@@ -134,3 +134,75 @@ A standalone headless Chrome 157 instance loaded the production build on macOS w
 | Fresh 256 × 128 board, paused | 151.9 | 2.3 |
 | After eight additional restarts | 160.3 | 2.6 |
 | After five seconds of maximum-speed autoplay, 329,731 steps | 261.8 | 30.2 |
+
+## Dynamic costs for tile entrances and free-arc edits
+
+For a fixed starting body, every win eats the same number of foods. Minimizing moves to victory therefore maximizes the final foods-per-step ratio. With a known RNG state, a full-game value function would assign zero to a win, infinite cost to a loss and the minimum of one plus each legal successor's value to an ongoing position. The ordered body, heading, food and RNG all affect that successor. The two calculations below solve smaller subproblems that preserve a route to safety. The live planner still uses bounded search, and future spawns can make a longer first bite preferable. The formulation uses the standard cost-to-go recurrence. [Bertsekas, Dynamic Programming](https://web.mit.edu/dimitrib/www/Bertsekas1987DP.pdf)
+
+**Tile entrances.** The reverse breadth-first search gives the minimum number of free tiles to cross. The planner memoizes the remaining move count for each tile and landing corner needed by a reachable entrance. A stack follows decreasing tile depth and reuses the search buffers. An exit that attains the geometric lower bound finishes that state immediately. It considers every legal exit one layer closer to the goal. The candidate costs are the number of cell moves to the exit, one crossing move and the stored value at the next landing corner. On the goal tile the value is the perimeter distance to the food. The direction around the tile comes from the live body. Each state takes at most four transitions. A predecessor is retained to reconstruct the branch. This minimizes cell moves over minimum-hop tile branches before the remaining components are attached. Completing the spanning cycle can force additional detours. The extra cost and predecessor buffers are allocated on demand and use 320 KiB on a 256 × 256 board.
+
+**Free-arc edits.** When the food lies between the head and tail on a materialized cycle, one sweep considers reversing a free segment or exchanging two linked pairs of edges. For cuts where the food falls inside the middle segment, the optimal outer cut minimizes its span among ends beyond the inner cut. A prefix-minimum tree over reversed endpoints answers that query. For food in the last segment, only the existence of a compatible outer cut matters. Each sweep finds the shortest first bite in this edit family in O(F log(F + 1)) time and O(F) scratch space for a free arc of length F. The planner repeats strictly improving edits until reaching the geometric lower bound, exhausting the edit family or spending its work allowance of three board lengths. Charging by actual free-arc length replaces the fixed edit counts. The occupied arc and its orientation survive every edit.
+
+An independent small-board test enumerates reversals and four-cut permutations, checks each resulting edge and compares its minimum with the sweep. A walled 8 × 6 fixture previously took 27 steps to the food. The corner planner reaches it safely in seven, matching the Manhattan lower bound.
+
+### Matched benchmarks against `00fe8e3`
+
+Each pair below gives baseline / new. The staged 256 × 256 runs use seeds 42, 91, 999, 7, 113 and 2026. The opening collects 100 foods per seed. Each synthetic body collects 16, or all six on the last fixture. Steps and long intervals are summed over seeds. A long interval exceeds 1,024 moves. Peak is the slowest individual call to `nextMove`, measured with a wall clock in Node on a shared Mac and including descheduling. The baseline was independently recompiled and compared byte for byte with the benchmark modules.
+
+| Occupancy | Edges | Moves | Long intervals | Longest interval | Peak ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 0% | Walls | 104,410 / 104,408 | 0 / 0 | 436 / 436 | 4.73 / 5.94 |
+| 0% | Wrap | 77,531 / 77,531 | 0 / 0 | 245 / 245 | 3.00 / 3.80 |
+| 8% | Walls | 88,454 / 88,422 | 14 / 14 | 9,706 / 9,706 | 18.38 / 10.26 |
+| 8% | Wrap | 73,297 / 73,273 | 12 / 12 | 5,439 / 5,439 | 7.02 / 10.92 |
+| 50% | Walls | 111,032 / 111,368 | 14 / 14 | 20,219 / 20,215 | 7.99 / 27.16 |
+| 50% | Wrap | 254,132 / 254,116 | 20 / 20 | 32,871 / 32,871 | 40.00 / 46.04 |
+| 90% | Walls | 44,096 / 43,564 | 16 / 15 | 3,197 / 3,200 | 4.37 / 7.72 |
+| 90% | Wrap | 121,988 / 45,758 | 46 / 7 | 3,745 / 4,718 | 29.16 / 22.82 |
+| 98% | Walls | 19,043 / 19,043 | 0 / 0 | 855 / 855 | 3.88 / 3.97 |
+| 98% | Wrap | 27,998 / 25,264 | 3 / 4 | 1,178 / 1,178 | 8.78 / 8.23 |
+| Last six | Walls | 79 / 79 | 0 / 0 | 6 / 6 | 6.46 / 5.67 |
+| Last six | Wrap | 86 / 86 | 0 / 0 | 6 / 6 | 7.48 / 7.02 |
+
+Six additional seeds (17, 31, 73, 83, 107, 171) used the same fixtures.
+
+| Occupancy | Edges | Moves | Long intervals | Longest interval | Peak ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 8% | Walls | 98,987 / 99,111 | 15 / 15 | 10,748 / 10,748 | 14.25 / 15.23 |
+| 8% | Wrap | 82,596 / 88,048 | 16 / 16 | 6,053 / 6,053 | 9.22 / 13.87 |
+| 50% | Walls | 123,111 / 125,611 | 21 / 22 | 15,070 / 15,070 | 8.90 / 5.26 |
+| 50% | Wrap | 326,980 / 327,008 | 25 / 25 | 32,975 / 32,975 | 22.06 / 15.60 |
+| 90% | Walls | 38,843 / 38,815 | 9 / 9 | 4,116 / 4,116 | 24.00 / 8.59 |
+| 90% | Wrap | 83,296 / 40,006 | 29 / 6 | 4,653 / 5,158 | 38.07 / 68.59 |
+| 98% | Walls | 19,490 / 18,959 | 0 / 0 | 809 / 809 | 4.83 / 20.63 |
+| 98% | Wrap | 25,056 / 22,103 | 3 / 3 | 1,133 / 1,133 | 55.17 / 12.48 |
+
+The following 96 × 64 games ran from the initial body to a win. Each ate 6,138 foods. The band totals below include the same three seeds throughout each game.
+
+| Seed | Edges | Moves | Long intervals | CPU seconds | Peak ms |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 42 | Walls | 1,642,257 / 1,670,246 | 431 / 445 | 7.84 / 9.30 | 46.04 / 22.44 |
+| 42 | Wrap | 1,290,156 / 1,336,536 | 223 / 253 | 6.61 / 7.09 | 13.83 / 18.54 |
+| 91 | Walls | 1,627,765 / 1,597,923 | 408 / 415 | 7.26 / 8.06 | 10.73 / 17.89 |
+| 91 | Wrap | 1,476,443 / 1,367,160 | 276 / 269 | 7.27 / 7.06 | 3.04 / 26.40 |
+| 999 | Walls | 1,665,129 / 1,698,409 | 455 / 434 | 7.31 / 8.02 | 2.93 / 7.04 |
+| 999 | Wrap | 1,388,629 / 1,337,134 | 244 / 228 | 6.85 / 6.60 | 14.33 / 2.42 |
+
+| Occupancy band | Wall moves | Wall peak ms | Wrap moves | Wrap peak ms |
+| --- | ---: | ---: | ---: | ---: |
+| 0-10% | 192,017 / 182,300 | 2.93 / 2.10 | 114,159 / 113,988 | 3.04 / 1.08 |
+| 10-20% | 414,534 / 397,415 | 1.55 / 3.14 | 233,430 / 231,388 | 1.18 / 2.42 |
+| 20-30% | 568,158 / 552,127 | 46.04 / 2.54 | 348,642 / 350,669 | 14.33 / 5.34 |
+| 30-40% | 651,516 / 669,808 | 2.47 / 22.44 | 464,935 / 458,188 | 10.25 / 2.06 |
+| 40-50% | 697,501 / 684,348 | 18.05 / 1.80 | 545,749 / 529,534 | 13.83 / 18.54 |
+| 50-60% | 689,333 / 697,054 | 7.61 / 17.89 | 595,218 / 631,550 | 2.16 / 2.05 |
+| 60-70% | 657,933 / 634,988 | 10.73 / 0.99 | 580,280 / 634,766 | 2.27 / 26.40 |
+| 70-80% | 552,441 / 565,041 | 1.19 / 2.36 | 623,963 / 561,627 | 1.36 / 1.74 |
+| 80-90% | 363,685 / 415,270 | 2.09 / 1.45 | 478,115 / 372,177 | 2.29 / 1.81 |
+| 90-100% | 148,033 / 168,227 | 2.13 / 1.32 | 170,737 / 156,943 | 0.70 / 0.73 |
+
+At half occupancy on wrapped seed 2026, the food appeared 159 cells away at step 237. Of the next 32,871 moves, 32,770 followed the transition cycle until the old body cleared, and 101 followed the subsequent food route. Seed 7 also spent 32,770 moves on a single transition. At 90% occupancy the new planner substantially reduces the number of long intervals on both wrapped seed sets, while the single longest interval grows in both. On the extra seeds the wrapped 8% fixture and the walled 50% fixture also cost more moves. A candidate that handed control back as soon as the retained body fitted the tile constraints and another that prioritized an earlier bite on a newly materialized cycle both increased midgame movement in the staged tests and were excluded.
+
+Use the staged and continuous commands above to reproduce the measurements at each revision. For the additional seeds set `SNAKE_BENCH_FILL=.08,.5,.9,.98` and `SNAKE_BENCH_SEEDS=17,31,73,83,107,171`.
+
+The two staged batches ran sequentially without a concurrent build or browser test. Across all 120 staged runs, process CPU time was 15.65 / 14.95 seconds. An earlier run with concurrent workloads had worst observed single calls of 278.35 / 195.16 ms. The six complete games used 43.15 / 46.14 CPU seconds for 9,090,379 / 9,007,408 moves. On the extra wrapped 90% seeds, the longest wait rose to 5,158 steps even though the batch total fell by 52%. In the Chrome regression for restoring legacy progress and starting a fresh 256 × 128 game, the new page used 2.5 MiB of JavaScript heap after collection. This measurement excludes native browser and graphics allocations.

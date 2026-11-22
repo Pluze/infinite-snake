@@ -50,6 +50,7 @@ function makeWorkspace(count: number) {
   return {
     forest: new Forest(count), flags: new Int8Array(2 * count),
     protectedEdge: new Uint8Array(2 * count), deferred: new Int32Array(2 * count),
+    branch: undefined as { cost: Int32Array; side: Uint8Array } | undefined,
     parent: new Int32Array(count), depth: new Int32Array(count), queue: new Int32Array(count),
   };
 }
@@ -196,7 +197,7 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
   const goal = tile(food.x, food.y), root = forest.root(tile(previous.x, previous.y));
   protectedEdge.fill(0);
   const tail = segment(first);
-  function trace(protect: boolean, visit?: (n: number, id: number, step: number) => void) {
+  function trace(protect: boolean, visit?: (n: number, id: number, step: number, side: number, corner: number) => void) {
     const directions: Direction[] = [], points: Point[] = [];
     let { x, y } = game.head;
     const previousCell = game.segment(game.last - 2)!;
@@ -217,7 +218,7 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
         else ny = y === 0 ? h - 1 : y - 1;
         if (nx === prevX && ny === prevY) continue;
         if (!joined && n >= 0) {
-          if (visit && !flags[id]) visit(n, id, step);
+          if (visit && !flags[id]) visit(n, id, step, side, south ? (east ? 2 : 3) : (east ? 1 : 0));
           else if (protect) protectedEdge[id] = 1;
         }
         if (!protect && !visit) { directions.push(d); points.push({ x: nx, y: ny }); }
@@ -244,18 +245,80 @@ function completeTileCycle(game: Game, chase?: Route, release = 0): Route | unde
         queue[end++] = n;
       }
     }
-    let reached = -1, entrance = -1, best = Infinity;
-    trace(false, (n, id, step) => {
-      if (parent[n] < 0 || step + 2 * depth[n] >= best) return;
-      best = step + 2 * depth[n]; reached = n; entrance = id;
+    // Orient every tile perimeter in the body's direction. In the free-tile
+    // distance DAG a state is the corner where the snake enters a tile.
+    // A transition walks to the chosen side, crosses it, and pays the
+    // remaining cost from the landing corner. Depth strictly decreases.
+    // Corners run clockwise from NW = 0. Crossing a vertical boundary flips
+    // the corner with XOR 1, and crossing a horizontal one uses XOR 3.
+    const { cost: branchCost, side: branchSide } = workspace.branch ??= {
+      cost: new Int32Array(4 * count), side: new Uint8Array(4 * count),
+    };
+    const goalCorner = (food.y & 1) ? (food.x & 1 ? 2 : 3) : (food.x & 1);
+    let reached = -1, entrance = -1, firstCorner = -1, best = Infinity;
+    let clockwise: boolean | undefined;
+    const along = (a: number, b: number) => (clockwise ? b - a : a - b) & 3;
+    branchCost.fill(-1);
+    // The explicit stack follows decreasing depth. A state is expanded only
+    // if a reachable entrance needs its value. Try the original BFS parent
+    // first; once its cost reaches the geometric bound no other exit can win.
+    // BFS is complete and edge deferral has not started, so both buffers are free.
+    const stateStack = queue, optionStack = deferred;
+    const costFrom = (start: number) => {
+      if (branchCost[start] >= 0) return branchCost[start];
+      let top = 0;
+      stateStack[0] = start;
+      optionStack[0] = 0;
+      while (top >= 0) {
+        const state = stateStack[top], t = state >> 2, corner = state & 3;
+        const preferred = ((parent[t] & 3) + 2) & 3;
+        const option = optionStack[top];
+        if (option === 5) { top--; continue; }
+        const side = option ? option - 1 : preferred;
+        optionStack[top]++;
+        if (option && side === preferred) continue;
+        const n = adjacent[4 * t + side];
+        if (n < 0 || parent[n] < 0 || depth[n] !== depth[t] - 1 || flags[edge(t, side, n)] < 0) continue;
+        const leave = (side + (clockwise ? 1 : 2)) & 3;
+        const next = 4 * n + (leave ^ (side & 1 ? 3 : 1));
+        if (branchCost[next] < 0) {
+          optionStack[top]--;
+          stateStack[++top] = next;
+          optionStack[top] = 0;
+          continue;
+        }
+        const cost = along(corner, leave) + 1 + branchCost[next];
+        if (branchCost[state] >= 0 && branchCost[state] <= cost) continue;
+        branchCost[state] = cost;
+        branchSide[state] = side;
+        const x = (t % cols) * 2 + Number(corner === 1 || corner === 2);
+        const y = Math.floor(t / cols) * 2 + Number(corner >= 2);
+        const dx = Math.abs(x - food!.x), dy = Math.abs(y - food!.y);
+        const bound = game.wraparound ? Math.min(dx, w - dx) + Math.min(dy, h - dy) : dx + dy;
+        if (cost === bound || cost === depth[t]) top--;
+      }
+      return branchCost[start];
+    };
+    trace(false, (n, id, step, side, corner) => {
+      if (parent[n] < 0 || step + 1 + depth[n] >= best) return;
+      if (clockwise === undefined) {
+        clockwise = corner === ((side + 1) & 3);
+        for (let c = 0; c < 4; c++) branchCost[4 * goal + c] = along(c, goalCorner);
+      }
+      const land = corner ^ (side & 1 ? 3 : 1);
+      const cost = step + 1 + costFrom(4 * n + land);
+      if (cost < best) { best = cost; reached = n; entrance = id; firstCorner = land; }
     });
     if (reached < 0) return;
     flags[entrance] = 1;
     forest.join(reached, root);
+    let corner = firstCorner;
     for (let t = reached; t !== goal;) {
-      const link = parent[t], p = Math.floor(link / 4);
-      flags[edge(p, link % 4, t)] = 1;
-      forest.join(p, t); t = p;
+      const side = branchSide[4 * t + corner], n = neighbor(t, side);
+      flags[edge(t, side, n)] = 1;
+      forest.join(t, n);
+      corner = ((side + (clockwise ? 1 : 2)) & 3) ^ (side & 1 ? 3 : 1);
+      t = n;
     }
   }
   if (!trace(true)) return;

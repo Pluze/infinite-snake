@@ -159,7 +159,13 @@ describe('torus persistence',()=>{
     for(let i=0;i<1100;i++){const plan=bot.preview(g);if(!plan.safe)break;g.step(plan.directions[0]);bot.advance(g);if(i===500)await p.save(g);}
     await p.save(g);const loaded=(await p.load(()=>{}))!;
     expect(loaded.snapshot()).toEqual(g.snapshot());expect(loaded.scores).toEqual(g.scores);
-    const d=bot.preview(g).directions[0];g.step(d);loaded.step(d);expect(loaded.snapshot()).toEqual(g.snapshot());
+    // Planning may persist a shorter cycle. Run the planner on both copies
+    // before advancing and compare the independently chosen moves and saves.
+    const direction = bot.preview(g).directions[0];
+    const resumed = new AutoPlayer().preview(loaded).directions[0];
+    expect(resumed).toBe(direction);
+    g.step(direction); loaded.step(resumed);
+    expect(loaded.snapshot()).toEqual(g.snapshot());
     await p.clear();expect(await p.load(()=>{})).toBeUndefined();
   });
 });
