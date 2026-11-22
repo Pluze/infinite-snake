@@ -37,15 +37,16 @@ try {
 
   for (const wraparound of [false, true]) {
     const continuous = process.env.SNAKE_BENCH_CONTINUOUS === '1';
+    const stepLimit = Number(process.env.SNAKE_BENCH_STEP_LIMIT ?? 2_000_000);
     for (const fill of (continuous ? [0] : process.env.SNAKE_BENCH_FILL ? process.env.SNAKE_BENCH_FILL.split(',').map(Number) : [0, .08, .5, .9, .98])) {
       for (const seed of (process.env.SNAKE_BENCH_SEEDS ?? '42,91,999').split(',').map(Number)) {
         const game = start(seed, wraparound, fill);
         const bot = new AutoPlayer();
-        const meals = continuous ? Math.ceil(game.capacity * .3) - game.length : fill ? 16 : 100;
+        const meals = continuous ? Math.ceil(game.capacity * Number(process.env.SNAKE_BENCH_UNTIL ?? .3)) - game.length : fill ? 16 : 100;
         let band = 1, bandStart = 0, bandPeakMs = 0, nextMoveMs = 0, escapeMoves = 0, longIntervals = 0;
         const startedAt = performance.now();
         let lastBite = 0, lowerBound = 0, slowMeals = 0, longestMeal = 0, peakMs = 0;
-        while (game.score < meals * 10 && game.steps < 2_000_000) {
+        while (game.score < meals * 10 && game.steps < stepLimit) {
           if (game.steps === lastBite) lowerBound += boardDistance(game, game.head, game.food.values().next().value);
           const started = performance.now();
           const move = bot.nextMove(game);

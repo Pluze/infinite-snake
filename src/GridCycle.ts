@@ -12,7 +12,7 @@ export class GridCycle {
 
   constructor(
     private readonly boardWidth: number, private readonly boardHeight: number, private readonly wraparound: boolean,
-    private readonly reverse = false, private readonly swapAxes = false,
+    private readonly reverse = false, private readonly swapAxes = false, private readonly rowOrigin = 0,
   ) {
     this.width = swapAxes ? boardHeight : boardWidth;
     this.height = swapAxes ? boardWidth : boardHeight;
@@ -23,10 +23,11 @@ export class GridCycle {
     this.insertion = this.rows === this.height ? this.size : this.width + (this.rows - 2) * (this.width - 1) + 1;
   }
 
-  reversed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, !this.reverse, this.swapAxes); }
-  transposed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, this.reverse, !this.swapAxes); }
+  reversed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, !this.reverse, this.swapAxes, this.rowOrigin); }
+  transposed() { return new GridCycle(this.boardWidth, this.boardHeight, this.wraparound, this.reverse, !this.swapAxes, this.rowOrigin); }
 
   index(p: Point) {
+    if (this.rowOrigin) p = { x: p.x, y: (p.y - this.rowOrigin + this.boardHeight) % this.boardHeight };
     const index = this.forwardIndex(this.swapAxes ? { x: p.y, y: p.x } : p);
     return this.reverse && index ? this.size - index : index;
   }
@@ -46,8 +47,10 @@ export class GridCycle {
   }
 
   point(index: number): Point {
-    const p = this.forwardPoint(this.reverse && index ? this.size - index : index);
-    return this.swapAxes ? { x: p.y, y: p.x } : p;
+    let p = this.forwardPoint(this.reverse && index ? this.size - index : index);
+    if (this.swapAxes) p = { x: p.y, y: p.x };
+    if (this.rowOrigin) p.y = (p.y + this.rowOrigin) % this.boardHeight;
+    return p;
   }
 
   private forwardPoint(index: number): Point {

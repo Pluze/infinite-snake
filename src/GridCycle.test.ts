@@ -130,7 +130,7 @@ it('reduces detours when continuing a legacy 96 by 64 wall-board save', () => {
 });
 
 it('executes delayed shortcuts after the tail releases a gap', () => {
-  const game = new Game(91, 256, 256, true);
+  const game = new Game(91, 255, 256, true);
   const cycle = new GridCycle(game.width, game.height, true);
   const length = game.capacity / 2;
   const end = game.seed * 157 % game.capacity;

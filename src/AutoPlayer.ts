@@ -1,4 +1,6 @@
 import { Direction, Game, key, Point } from './Game';
+import { bridgeLength } from './CycleBridge';
+import { tileRoute } from './TileRoute';
 import { chooseCycleRollout } from './CycleRollout';
 import { Cycle, TorusCycle } from './TorusCycle';
 import { GridCycle } from './GridCycle';
@@ -22,6 +24,9 @@ export class AutoPlayer {
   private expected?: Point;
   private cycle?: Cycle;
   private cycleRemaining = 0;
+  private retryTileAt = Infinity;
+  private bridgeRetryStep = 0;
+  private bridgeEnd = 0;
   private afterWait?: { at: number; route: FoodRoute };
   private replanCycleAt = 0;
   private plannedStep = -1;
@@ -39,6 +44,8 @@ export class AutoPlayer {
   private coverageRoute = false;
   clear() {
     this.afterWait = undefined;
+    this.retryTileAt = Infinity;
+    this.bridgeRetryStep = this.bridgeEnd = 0;
     this.route = [];
     this.points = [];
     this.cursor = 0;
@@ -115,6 +122,21 @@ export class AutoPlayer {
 
   private planMove(game: Game): Move {
     const large = useAdaptiveSearch(game);
+    if (this.bridgeEnd) {
+      if (game.steps < this.bridgeEnd) return this.followCycle(game, this.bridgeEnd - game.steps, 'Moving to a shorter food cycle');
+      this.bridgeEnd = 0;
+      this.ordered = true;
+      this.retryChaseAt = 0;
+    }
+    if (game.steps >= this.retryTileAt) {
+      const remaining = this.route.length - this.cursor;
+      const better = tileRoute(game);
+      if (better && better.directions.length < remaining) {
+        this.cursor = 0;
+        return this.cacheTileRoute(game, better);
+      }
+      this.retryTileAt = remaining > 128 ? game.steps + Math.max(32, Math.ceil(remaining / 8)) : Infinity;
+    }
     if (this.afterWait && game.steps >= this.afterWait.at) {
       const { route } = this.afterWait;
       this.cursor = 0;
@@ -152,6 +174,20 @@ export class AutoPlayer {
     this.cycleAfter = undefined;
     this.rejoin = undefined;
     this.retryRejoinAt = Infinity;
+    const tiled = game.capacity >= ADAPTIVE_BOARD_CELLS && game.capacity <= 65_536
+      && game.width >= 4 && game.height >= 4 && game.width % 2 === 0 && game.height % 2 === 0;
+    if (tiled && this.retryChaseAt === 0) {
+      const route = tileRoute(game);
+      if (route) {
+        this.ordered = undefined;
+        return this.cacheTileRoute(game, route);
+      }
+    }
+    const canBridge = tiled && game.wraparound && game.steps >= this.bridgeRetryStep;
+    if (canBridge && this.retryChaseAt === 0 && this.canCertifyRejoin(game) && game.length > 2 * (game.width + game.height)) {
+      const bridge = this.bridgeToTileCycle(game);
+      if (bridge) return bridge;
+    }
     if (!this.cycle) return this.planRecovery(game);
     if (this.ordered !== true) {
       this.ordered = this.cycle.ordered(game.segments.values());
@@ -188,6 +224,10 @@ export class AutoPlayer {
       && game.capacity >= ADAPTIVE_BOARD_CELLS && game.length < game.capacity * .85) {
       const choice = chooseCycleRollout(game, this.cycle);
       if (choice) {
+        if (canBridge && choice.moves > game.width + game.height) {
+          const bridge = this.bridgeToTileCycle(game);
+          if (bridge) return bridge;
+        }
         this.retryChaseAt = Infinity;
         this.replanCycleAt = Infinity;
         this.coverageRoute = true;
@@ -224,6 +264,30 @@ export class AutoPlayer {
     const food = game.food.values().next().value;
     if (!large && !chases.length && food) this.rewire(game, food);
     return this.planCoverage(game, chases);
+  }
+
+  private bridgeToTileCycle(game: Game): Move | undefined {
+    this.bridgeRetryStep = game.steps + game.length;
+    const horizontal = new GridCycle(game.width, game.height, false);
+    const vertical = horizontal.transposed();
+    const shift = game.head.y - game.head.y % 2;
+    const shifted = new GridCycle(game.width, game.height, false, false, false, shift);
+    for (const cycle of [shifted, horizontal, horizontal.reversed(), vertical, vertical.reversed()]) {
+      const length = bridgeLength(game, cycle);
+      if (!length) continue;
+      this.ordered = undefined;
+      this.cycle = cycle;
+      this.bridgeEnd = game.steps + length;
+      this.replanCycleAt = this.bridgeEnd;
+      return this.followCycle(game, length, 'Moving to a shorter food cycle');
+    }
+  }
+
+  private cacheTileRoute(game: Game, route: { directions: Direction[]; points: Point[] }) {
+    const distance = boardDistance(game, game.head, route.points[route.points.length - 1]);
+    this.retryTileAt = route.points.length > distance * 2 + 32
+      ? game.steps + Math.max(32, Math.ceil(Math.min(game.length, route.points.length) / 16)) : Infinity;
+    return this.cacheRoute(game, { ...route, coverage: false }, 'Following a safe route to food');
   }
 
   private rewire(game: Game, food: Point) {
@@ -770,6 +834,7 @@ export class AutoPlayer {
       }
       this.retryRejoinAt = this.cycleAfter && this.cursor < this.route.length && game.length > 256 && this.canCertifyRejoin(game)
         ? game.steps : Infinity;
+      this.retryTileAt = Infinity;
       this.retryChaseAt = 0;
       this.retryRewireAt = 0;
       this.cycleRemaining = 0;
