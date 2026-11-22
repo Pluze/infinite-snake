@@ -55,15 +55,18 @@ export class AutoPlayer {
       };
     }
     if (this.cycleRemaining) {
+      // The cycle may be a temporary fallback while a shortcut opens.
+      const untilReplan = game.capacity >= 8192 ? this.replanCycleAt - game.steps : Infinity;
+      const length = Math.min(this.cycleRemaining, untilReplan);
       const directions: Direction[] = [], points: Point[] = [];
       let point = game.head;
-      for (let i = 0; i < Math.min(64, this.cycleRemaining); i++) {
+      for (let i = 0; i < Math.min(64, length); i++) {
         const direction = this.cycle!.direction(point);
         point = game.next(point, direction);
         directions.push(direction);
         points.push(point);
       }
-      return { ...move, directions, points, path: { cycle: this.cycle!, length: this.cycleRemaining } };
+      return { ...move, directions, points, path: { cycle: this.cycle!, length } };
     }
     return { ...move, directions: [move.direction], points: [game.next(game.head, move.direction)] };
   }
@@ -166,6 +169,20 @@ export class AutoPlayer {
       }
     }
 
+    if (food && game.capacity >= 8192) {
+      const incumbent = Math.min(limit, ...candidates.map(route => route.directions.length));
+      const directDistance = boardDistance(game, game.head, food);
+      // Try the tail-aware route when the existing choices would still scan
+      // a substantial arc relative to the distance to the food.
+      if (incumbent > Math.max(1024, directDistance * 2)) {
+        const progress = this.planForwardShortcuts(game, limit, incumbent);
+        if (progress) {
+          if (progress.complete) candidates.push(progress.route);
+          else if (!candidates.length) return this.cacheRoute(game, progress.route, 'Taking a shortcut through the safe cycle');
+        }
+      }
+    }
+
     const next = cycle.direction(game.head);
     const safe = game.canMove(next);
     if (food && safe && candidates.length) {
@@ -240,6 +257,48 @@ export class AutoPlayer {
         nodes.push({ p, parent: i, d, progress, steps: n.steps + 1 });
       }
     }
+  }
+
+  private planForwardShortcuts(game: Game, limit: number, incumbent: number) {
+    const cycle = this.cycle!;
+    const directions: Direction[] = [];
+    const points: Point[] = [];
+    const origin = game.head;
+    const start = cycle.index(origin);
+    const offset = (point: Point) => (cycle.index(point) - start + cycle.size) % cycle.size;
+    let current = origin;
+    let progress = 0;
+    const budget = Math.min(incumbent - 1, Math.max(1024, game.width + game.height));
+    for (let step = 1; step <= budget; step++) {
+      const released = game.segments.get(game.first + step);
+      const retained = game.segments.get(game.first + step - 1);
+      // Compare each jump with the tail on that move. Eating keeps one extra
+      // old segment. Once the old head is the tail, its lifted index is size.
+      const moveClearance = released ? offset(released) || cycle.size : cycle.size;
+      const eatClearance = retained ? offset(retained) || cycle.size : cycle.size;
+      let best = progress;
+      let next: Point | undefined;
+      let direction: Direction = game.direction;
+      for (let d = 0; d < 4; d++) {
+        const move = d as Direction;
+        const point = game.next(current, move);
+        if (!game.contains(point) || (step === 1 && !game.canMove(move))) continue;
+        const advance = offset(point);
+        if (advance <= best || advance > limit || advance >= (advance === limit ? eatClearance : moveClearance)) continue;
+        best = advance;
+        next = point;
+        direction = move;
+      }
+      if (!next) break;
+      progress = best;
+      current = next;
+      directions.push(direction);
+      points.push(next);
+      if (progress === limit) return { complete: true, route: { directions, points, coverage: true } };
+    }
+    // A partial route is useful only if it has already bypassed a material
+    // part of the scan. Its final step will trigger a fresh plan.
+    if (progress - directions.length >= 128) return { complete: false, route: { directions, points, coverage: true } };
   }
 
   private followCycle(game: Game, length: number, reason: string): Move {

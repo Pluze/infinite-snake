@@ -50,8 +50,8 @@ it('improves efficiency AUC while still filling each benchmark board safely', ()
     const bot = new AutoPlayer();
     const steps: number[] = [];
     while (!game.won && game.steps < previous[9]) {
-      const plan = bot.preview(game);
-      if (!plan.safe || !game.step(plan.directions[0])) throw Error('Autoplay lost its safe route');
+      const move = bot.nextMove(game);
+      if (!move.safe || !game.step(move.direction)) throw Error('Autoplay lost its safe route');
       bot.advance(game);
       if (game.length >= Math.ceil(game.capacity * (steps.length + 1) / 10)) steps.push(game.steps);
     }

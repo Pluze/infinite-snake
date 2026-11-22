@@ -154,7 +154,6 @@ export class Renderer {
         ctx.lineTo(x + vector.x * s, y + vector.y * s);
       };
       const path = plan.path;
-      let target = plan.points[plan.points.length - 1];
       ctx.strokeStyle = '#b5e69b80';
       ctx.lineWidth = Math.max(1, s * .07);
       ctx.setLineDash([s * .15, s * .2]);
@@ -162,7 +161,6 @@ export class Renderer {
       if (path && 'cycle' in path) {
         const { cycle, length } = path;
         const start = cycle.index(game.head);
-        target = cycle.point((start + length) % cycle.size);
         if (length <= visibleCells) {
           for (let offset = 0; offset < length; offset++) {
             const point = cycle.point((start + offset) % cycle.size);
@@ -183,13 +181,13 @@ export class Renderer {
           const point = i === 0 ? path.origin : path.points[i - 1];
           copies(point, (x, y) => edge(x, y, path.directions[i]));
         }
-        target = path.points[path.points.length - 1];
       } else {
         copies(game.head, (x, y) => edge(x, y, plan.directions[0]));
       }
       ctx.stroke();
       ctx.setLineDash([]);
-      if (target && game.hasFood(target)) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
+      const target = game.food.values().next().value;
+      if (target) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
     }
     const drawSegment = (index: number, point: Point, x: number, y: number) => {
       const previous = game.segments.get(index - 1);

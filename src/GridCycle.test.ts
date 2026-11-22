@@ -39,3 +39,32 @@ it('plans and resumes autoplay on a board with over 16 million cells', () => {
   expect(move.direction).toBeDefined();
   expect(restored.step(move.direction)).toBe(true);
 });
+
+it('skips long row scans on sparse and half-full 256 by 256 boards', () => {
+  const scenarios = [
+    { wraparound: true, length: 312, food: { x: 157, y: 187 }, maxSteps: 200 },
+    { wraparound: true, length: 32_768, food: { x: 157, y: 100 }, maxSteps: 100 },
+    { wraparound: false, length: 32_768, food: { x: 157, y: 100 }, maxSteps: 100 },
+  ];
+  for (const { wraparound, length, food, maxSteps } of scenarios) {
+    const game = new Game(42, 256, 256, wraparound);
+    const cycle = new GridCycle(game.width, game.height, wraparound);
+    const end = cycle.index({ x: 139, y: 21 });
+    const body = Array.from({ length }, (_, i) => cycle.point((end - length + 1 + i + cycle.size) % cycle.size));
+    const restored = Game.restore({
+      ...game.snapshot(), body, food: [food], travel: body[length - 1], direction: cycle.direction(body[length - 2]),
+    }, [0]);
+    const bot = new AutoPlayer();
+    const { path } = bot.preview(restored);
+    if (!path || 'cycle' in path) throw Error('Expected a direct shortcut to the food');
+    expect(path.points[path.points.length - 1]).toEqual(food);
+    expect(path.directions.length).toBeLessThanOrEqual(maxSteps);
+    for (const direction of path.directions) {
+      expect(bot.nextMove(restored)).toMatchObject({ direction, safe: true });
+      expect(restored.step(direction)).toBe(true);
+      bot.advance(restored);
+    }
+    expect(restored.score).toBe(10);
+    expect(cycle.ordered(restored.body())).toBe(true);
+  }
+});
