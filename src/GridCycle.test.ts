@@ -128,3 +128,23 @@ it('reduces detours when continuing a legacy 96 by 64 wall-board save', () => {
   }
   expect(restored.score).toBe(160);
 });
+
+it('executes delayed shortcuts after the tail releases a gap', () => {
+  const game = new Game(91, 256, 256, true);
+  const cycle = new GridCycle(game.width, game.height, true);
+  const length = game.capacity / 2;
+  const end = game.seed * 157 % game.capacity;
+  const body = Array.from({ length }, (_, i) => cycle.point((end - length + 1 + i + cycle.size) % cycle.size));
+  const restored = Game.restore({ ...game.snapshot(), body, food: [], travel: body[length - 1],
+    direction: cycle.direction(body[length - 2]) }, [0]);
+  const bot = new AutoPlayer();
+  let waited = false;
+  while (restored.score < 160 && restored.steps < 250_000) {
+    const move = bot.nextMove(restored);
+    waited ||= move.reason === 'Waiting for the tail to clear the food';
+    if (!move.safe || move.direction === undefined || !restored.step(move.direction)) throw Error('Delayed shortcut collided');
+    bot.advance(restored);
+  }
+  expect(waited).toBe(true);
+  expect(restored.score).toBe(160);
+});

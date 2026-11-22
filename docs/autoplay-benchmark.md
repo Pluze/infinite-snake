@@ -59,3 +59,62 @@ The comparison below uses the preceding English-history revision, `3e75a70`, as 
 | 256 × 128, 8% | 50,411 → 40,359 | 19 → 16 |
 
 At 24% occupancy, the 96 × 64 wall-board runs took 10,725 → 6,156 steps for seed 42, 6,153 → 5,094 for seed 91, and 4,881 → 10,140 for seed 999. The same headless Node.js run measured a peak planning call of 7.18 → 14.65 ms across these three samples. This measurement includes runtime pauses and does not measure browser frame rate.
+
+## Multi-food planning
+
+The baseline is `853a40b`. The simulator uses the saved RNG state, so a different body at the first bite can produce a different second food. On open boards it searches for up to six consecutive bites and verifies a route back to a safe cycle after the last one. On ordered indexed cycles in midgame, a beam of three positions compares up to four meals with different shortcut allowances at each bite. It can predict when the tail releases a trapped food and switch to a shortcut at that tick. It stores the endpoints of long cycle runs and searches the projected body by index. A branch that would require the rare free-cell rank draw stops at the previous forecast depth.
+
+The score minimizes movement over this limited horizon. It can trade a long wait for several subsequent short bites. A guard preserves an immediately attainable geometric shortest path if deferring it would cost more than both half the body length and a board crossing. The comparison covers a bounded set of routes and does not establish global optimality.
+
+Each row sums seeds 42, 91, and 999. Each opening collects 100 foods per seed. Each occupancy fixture collects 16. Peaks include garbage collection and host scheduling and vary across runs.
+
+| Board | Edges | Start | Steps before / after | Meals over 1,024 steps | Longest meal | Peak planning (ms) |
+|---|---|---:|---:|---:|---:|---:|
+| 256 x 256 | Walls | 0% | 54,907 / 53,283 | 0 / 0 | 399 / 399 | 4.86 / 2.7 |
+| 256 x 256 | Walls | 8% | 77,170 / 78,934 | 16 / 15 | 5,447 / 5,777 | 13.33 / 5.26 |
+| 256 x 256 | Walls | 50% | 631,624 / 501,443 | 26 / 27 | 47,322 / 49,978 | 27.79 / 3.01 |
+| 256 x 256 | Walls | 90% | 51,137 / 51,137 | 20 / 20 | 3,662 / 3,662 | 44.35 / 22.53 |
+| 256 x 256 | Walls | 98% | 13,400 / 13,400 | 1 / 1 | 1,114 / 1,114 | 15.54 / 3.68 |
+| 256 x 256 | Wrap | 0% | 41,908 / 39,382 | 0 / 0 | 304 / 243 | 18.79 / 3.28 |
+| 256 x 256 | Wrap | 8% | 91,860 / 76,484 | 18 / 15 | 5,482 / 5,482 | 27.4 / 26.03 |
+| 256 x 256 | Wrap | 50% | 611,800 / 547,995 | 24 / 26 | 47,576 / 54,298 | 12.96 / 6.42 |
+| 256 x 256 | Wrap | 90% | 50,813 / 50,813 | 20 / 20 | 3,676 / 3,676 | 21.14 / 12.66 |
+| 256 x 256 | Wrap | 98% | 13,629 / 13,629 | 0 / 0 | 931 / 931 | 17.05 / 3.76 |
+| 256 x 128 | Walls | 8% | 40,359 / 39,778 | 16 / 15 | 3,010 / 3,010 | 6.39 / 6.05 |
+| 256 x 128 | Walls | 50% | 384,428 / 305,029 | 31 / 29 | 23,562 / 32,554 | 5.05 / 3.91 |
+| 256 x 128 | Wrap | 8% | 33,951 / 25,315 | 13 / 10 | 2,932 / 2,595 | 4.56 / 4.47 |
+| 256 x 128 | Wrap | 50% | 372,557 / 289,781 | 27 / 26 | 23,590 / 32,552 | 7.34 / 2.39 |
+| 96 x 64 | Walls | 0% | 20,209 / 18,045 | 0 / 0 | 213 / 229 | 1.24 / 1.67 |
+| 96 x 64 | Walls | 24% | 21,390 / 19,513 | 9 / 11 | 1,531 / 1,480 | 10.24 / 8.7 |
+| 96 x 64 | Walls | 50% | 14,387 / 14,387 | 4 / 4 | 2,102 / 2,102 | 10.24 / 10.33 |
+| 96 x 64 | Walls | 90% | 4,586 / 4,586 | 0 / 0 | 505 / 505 | 1.26 / 0.99 |
+| 96 x 64 | Walls | 98% | 1,244 / 1,244 | 0 / 0 | 102 / 102 | 0.46 / 0.41 |
+| 96 x 64 | Wrap | 0% | 17,143 / 14,285 | 0 / 0 | 155 / 153 | 1.33 / 0.66 |
+| 96 x 64 | Wrap | 24% | 15,454 / 15,392 | 6 / 6 | 1,417 / 1,417 | 2.73 / 3.07 |
+| 96 x 64 | Wrap | 50% | 9,944 / 9,944 | 2 / 2 | 1,562 / 1,562 | 10.49 / 10.09 |
+| 96 x 64 | Wrap | 90% | 4,586 / 4,586 | 0 / 0 | 505 / 505 | 0.67 / 0.54 |
+| 96 x 64 | Wrap | 98% | 1,244 / 1,244 | 0 / 0 | 102 / 102 | 0.34 / 0.31 |
+
+The following 256 x 256 half-board snapshots show seed sensitivity. Seeds 7, 113, and 2026 supplement the original three.
+
+| Seed | Wall steps before / after | Wrapped steps before / after |
+|---:|---:|---:|
+| 42 | 174,658 / 164,908 | 155,080 / 164,870 |
+| 91 | 259,627 / 187,122 | 259,487 / 199,818 |
+| 999 | 197,339 / 149,413 | 197,233 / 183,307 |
+| 7 | 236,718 / 179,068 | 236,748 / 178,666 |
+| 113 | 204,329 / 126,135 | 204,289 / 118,113 |
+| 2026 | 243,578 / 218,011 | 217,585 / 198,683 |
+
+Continuous 96 x 64 games start with the default six segments and run until the snake first reaches 30% occupancy, 1,838 meals per game. Each row covers the indicated growth interval across three seeds. Recovery steps count the turns spent on a certified return to the cycle.
+
+| Edges | Occupancy interval | Steps before / after | Recovery steps before / after |
+|---|---|---:|---:|
+| Walls | 0% to 10% | 200,379 / 188,118 | 64,441 / 57,504 |
+| Walls | 10% to 20% | 478,637 / 472,859 | 274,037 / 277,061 |
+| Walls | 20% to 30% | 916,841 / 876,261 | 558,445 / 522,212 |
+| Wrap | 0% to 10% | 152,780 / 146,296 | 47,219 / 45,881 |
+| Wrap | 10% to 20% | 382,819 / 366,724 | 266,245 / 249,493 |
+| Wrap | 20% to 30% | 833,690 / 812,564 | 579,579 / 573,867 |
+
+Use `SNAKE_BENCH_CONTINUOUS=1 SNAKE_BENCH_WIDTH=96 SNAKE_BENCH_HEIGHT=64 node scripts/benchmark-autoplay.cjs` for continuous games. Use `SNAKE_BENCH_FILL=.5 SNAKE_BENCH_SEEDS=42,91,999,7,113,2026 node scripts/benchmark-autoplay.cjs` for the six half-board seeds.

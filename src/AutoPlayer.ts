@@ -1,4 +1,5 @@
 import { Direction, Game, key, Point } from './Game';
+import { chooseCycleRollout } from './CycleRollout';
 import { Cycle, TorusCycle } from './TorusCycle';
 import { GridCycle } from './GridCycle';
 import { boardDistance, routeCandidates, RouteNode, searchRoute } from './RouteSearch';
@@ -21,6 +22,7 @@ export class AutoPlayer {
   private expected?: Point;
   private cycle?: Cycle;
   private cycleRemaining = 0;
+  private afterWait?: { at: number; route: FoodRoute };
   private replanCycleAt = 0;
   private plannedStep = -1;
   private plannedMove?: Move;
@@ -36,6 +38,7 @@ export class AutoPlayer {
   private phaseReason = '';
   private coverageRoute = false;
   clear() {
+    this.afterWait = undefined;
     this.route = [];
     this.points = [];
     this.cursor = 0;
@@ -112,6 +115,13 @@ export class AutoPlayer {
 
   private planMove(game: Game): Move {
     const large = useAdaptiveSearch(game);
+    if (this.afterWait && game.steps >= this.afterWait.at) {
+      const { route } = this.afterWait;
+      this.cursor = 0;
+      this.afterWait = undefined;
+      this.replanCycleAt = Infinity;
+      return this.cacheRoute(game, route, 'Following a multi-food plan');
+    }
     if (game.steps >= this.retryRejoinAt && this.cycle) {
       // A few retries during a long escape can use cells the tail has since released.
       const remaining = this.route.length - this.cursor;
@@ -119,7 +129,8 @@ export class AutoPlayer {
       const bite = food ? this.points.findIndex((p, i) => i >= this.cursor && p.x === food.x && p.y === food.y) : -1;
       const before = bite < 0 ? remaining : bite - this.cursor + 1;
       this.retryRejoinAt = before > 192 ? game.steps + Math.min(this.retryWindow(game), Math.ceil(before / 3)) : Infinity;
-      const chase = this.certifiedChase(game, this.cycleAfter ?? this.cycle, before);
+      const cycle = this.cycleAfter ?? this.cycle;
+      const chase = this.planMeals(game, cycle, before) ?? this.certifiedChase(game, cycle, before);
       if (chase) {
         this.cursor = 0;
         this.retryRejoinAt = Infinity;
@@ -173,11 +184,34 @@ export class AutoPlayer {
       }
       return this.planRecovery(game);
     }
+    if (this.retryChaseAt === 0 && this.cycle instanceof GridCycle && game.length > 256 && !this.canCertifyRejoin(game)
+      && game.capacity >= ADAPTIVE_BOARD_CELLS && game.length < game.capacity * .85) {
+      const choice = chooseCycleRollout(game, this.cycle);
+      if (choice) {
+        this.retryChaseAt = Infinity;
+        this.replanCycleAt = Infinity;
+        this.coverageRoute = true;
+        this.retryRewireAt = Infinity;
+        this.cycleRemaining = choice.moves;
+        if (choice.wait && choice.points.length) {
+          this.afterWait = { at: game.steps + choice.wait, route: { ...choice, coverage: true } };
+          this.replanCycleAt = this.afterWait.at;
+          return this.followCycle(game, choice.moves, 'Waiting for the tail to clear the food');
+        }
+        if (choice.points.length) return this.cacheRoute(game, { ...choice, coverage: true }, 'Following a multi-food plan');
+        return this.followCycle(game, choice.moves, 'Following a multi-food plan');
+      }
+    }
     const chases: FoodRoute[] = [];
     // A simple chase uses at most F moves and, with L >= F, cannot
     // replace the old head. Under a zero-gap certificate its new suffix
     // must follow the cycle, so a separate chase search cannot shorten it.
     if (game.length * 2 < game.capacity && game.steps >= this.retryChaseAt) {
+      const food = game.food.values().next().value;
+      if (large && food && this.canCertifyRejoin(game)) {
+        const batch = this.planMeals(game, this.cycle, this.cycle.distance(game.head, food));
+        if (batch) return this.cacheRoute(game, batch, 'Chasing multiple foods');
+      }
       const firstAttempt = this.retryChaseAt === 0;
       const chase = this.findFoodRoute(game, true);
       if (chase) chases.push(chase);
@@ -593,6 +627,35 @@ export class AutoPlayer {
       (_from, to, steps) => (game.occupied.get(key(to)) ?? -1) < game.first + steps, game.direction)) {
       yield this.searchedRoute(path);
     }
+  }
+
+  // The incumbent gives us a move horizon. Roll the real spawn sequence forward
+  // and accept a batch only if it earns multiple meals within that horizon.
+  private planMeals(game: Game, cycle: Cycle, before: number): FoodRoute | undefined {
+    const food = game.food.values().next().value;
+    if (!food || before <= boardDistance(game, game.head, food) + 1) return;
+    const fork = game.forkForPlanning();
+    const route: FoodRoute = { directions: [], points: [], coverage: false };
+    const horizon = Math.min(before - 1, 4 * (game.width + game.height));
+    let searchRemaining = this.searchBudget(game);
+    for (let meals = 0; meals < 6 && searchRemaining > 0; meals++) {
+      const target = fork.food.values().next().value;
+      if (!target || route.points.length + boardDistance(fork, fork.head, target) > horizon) break;
+      const budget = Math.min(searchRemaining, boardDistance(fork, fork.head, target) * 2 + 32);
+      searchRemaining -= budget;
+      const path = searchRoute(fork, fork.head, target, budget,
+        (_from, to) => !fork.isOccupied(to), fork.direction);
+      if (!path || route.points.length + path.length - 1 > horizon) break;
+      for (let i = 1; i < path.length; i++) {
+        if (!fork.step(path[i].d)) return;
+        route.directions.push(path[i].d);
+        route.points.push(fork.head);
+      }
+      if (fork.won) return route;
+    }
+    if (fork.score < game.score + 20) return;
+    const rejoin = this.certifyRejoin(fork, cycle);
+    if (rejoin) return { ...route, rejoin };
   }
 
   private certifiedChase(game: Game, cycle: Cycle, before: number,

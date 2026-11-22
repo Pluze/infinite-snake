@@ -7,7 +7,7 @@ const samePoint = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
 export const key = (p: Point) => `${p.x},${p.y}`;
 export const add = (p: Point, d: Direction): Point => ({ x: p.x + vectors[d].x, y: p.y + vectors[d].y });
 const modulo = (n: number, size: number) => ((n % size) + size) % size;
-const nextRandom = (state: number) => { state ^= state << 13; state ^= state >>> 17; return (state ^ (state << 5)) >>> 0; };
+export const nextRandom = (state: number) => { state ^= state << 13; state ^= state >>> 17; return (state ^ (state << 5)) >>> 0; };
 export type Snapshot = { version: 2; seed: number; rng: number; width: number; height: number; wraparound?: boolean; hitWall?: boolean; food: Point[]; autoCycle?: Point[]; body: Point[]; travel: Point; direction: Direction; steps: number; turns: number; elapsed: number; dead: boolean; won: boolean; score: number; historyEvents?: number };
 export class Game {
   seed: number;
