@@ -136,3 +136,19 @@ it('matches an independent shortest-win search with real steps and food respawns
     expect(game.won).toBe(true);
   }
 });
+
+it('takes an 80-step certified geodesic past a long walled sweep', () => {
+  const base = new Game(42, 96, 64, false), cycle = new GridCycle(96, 64, false);
+  const body = Array.from({ length: 48 }, (_, i) => cycle.point(816 + i));
+  const food = { x: 17, y: 0 };
+  const game = Game.restore({ ...base.snapshot(), body, food: [food], travel: body[47],
+    direction: cycle.direction(body[46]) }, [0]);
+  const bot = new AutoPlayer();
+  for (let i = 0; i < 80; i++) {
+    const move = bot.nextMove(game);
+    expect(move.safe && game.step(move.direction)).toBe(true);
+    bot.advance(game);
+  }
+  expect(game.head).toEqual(food);
+  expect(game.score).toBe(10);
+});

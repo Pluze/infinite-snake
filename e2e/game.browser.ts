@@ -350,8 +350,9 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await expect(page.locator('#growth-chart svg text[x="324"]').last()).toHaveText('1');
   await expect(page.locator('#growth-chart svg circle')).toHaveAttribute('cx', '270');
   await expect(page.locator('#efficiency-summary')).toHaveText('1 step');
+  await expect(page.locator('#efficiency-chart [data-series="meal-mean"]')).toHaveCount(1);
   await page.locator('#efficiency-chart svg circle').hover();
-  await expect(page.locator('#efficiency-chart .chart-tooltip')).toHaveText('Step 1 · 1 step to food · 0.333× (width + height)');
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Step 1 · 1 step to food · 0.333× (width + height) · Mean 1');
   await page.locator('#growth-chart svg circle').hover();
   await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
@@ -418,7 +419,7 @@ test('movement keys take over focused controls and accelerate straight ahead', a
   expect(await board.getAttribute('data-steps')).toBe('4');
 });
 
-test('wrap copies alternate snake colors across both seams at detail and overview scales', async ({ page }) => {
+test('one highlighted snake stays continuous across both seams at detail and overview scales', async ({ page }) => {
   await page.goto('/');
   const samples = await page.evaluate(async () => {
     const gameModule = '/src/Game.ts', rendererModule = '/src/Renderer.ts';
@@ -435,8 +436,8 @@ test('wrap copies alternate snake colors across both seams at detail and overvie
     const samples: string[][] = [];
     for (const scale of [16, 2]) {
       renderer.scale = scale;
-      renderer.x = -7;
-      renderer.y = 7;
+      renderer.x = 9;
+      renderer.y = -2;
       renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
       samples.push([[8, 0], [9, 0], [9, -1], [17, 0], [18, 0], [18, -1], [9, 6], [18, 6], [0, -8]].map(([wx, wy]) => {
         const x = innerWidth / 2 + (wx - renderer.x) * scale;
@@ -446,9 +447,40 @@ test('wrap copies alternate snake colors across both seams at detail and overvie
     }
     return samples;
   });
-  const green = '105,202,144', purple = '165,180,232';
-  const rose = '220,153,186', gold = '220,199,125';
-  const checker = [green, green, green, purple, purple, purple, rose, gold, gold];
-  // The exact center pixel of a 90-degree bend lies on the sprite outline.
-  expect(samples).toEqual([[green, '53,123,89', green, purple, '93,105,158', purple, rose, gold, gold], checker]);
+  const green = '105,202,144', ghost = '57,75,67';
+  expect(samples).toEqual([
+    [green, '53,123,89', green, ghost, '40,55,47', ghost, ghost, ghost, ghost],
+    [green, green, green, ghost, ghost, ghost, ghost, ghost, ghost],
+  ]);
+});
+
+test('a full wrapped board shows a single fitted snake and keeps manual zoom', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const gameModule = '/src/Game.ts', rendererModule = '/src/Renderer.ts';
+    const { Game } = await import(gameModule), { Renderer } = await import(rendererModule);
+    const width = 96, height = 64;
+    const body = Array.from({ length: width * height }, (_, i) => {
+      const row = Math.floor(i / width), col = i % width;
+      return { x: ((row % 2 ? width - 1 - col : col) + 16) % width, y: (row + 12) % height };
+    });
+    const game = Game.restore({ ...new Game(42, width, height).snapshot(),
+      body, travel: body[body.length - 1], food: [], won: true }, [0]);
+    const canvas = document.createElement('canvas'), renderer = new Renderer(canvas);
+    const render = () => renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
+    renderer.scale = 1;
+    render();
+    const fitted = renderer.scale;
+    renderer.scale = 4;
+    // The final head is (16, 11). Row 32 is at lifted y = -20.
+    renderer.x = 56; renderer.y = -20;
+    render();
+    const ctx = canvas.getContext('2d')!;
+    const pixel = (offset: number) => Array.from(ctx.getImageData(innerWidth / 2 + offset, innerHeight / 2, 1, 1).data).slice(0, 3);
+    return { fitted, scale: renderer.scale, body: pixel(0), copy: pixel(width * 4) };
+  });
+  expect(result.fitted).toBeGreaterThan(1);
+  expect(result.scale).toBe(4);
+  expect(result.body).toEqual([105, 202, 144]);
+  expect(result.copy).toEqual([16, 25, 21]);
 });

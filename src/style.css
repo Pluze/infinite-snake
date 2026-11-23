@@ -16,3 +16,5 @@ dialog{background:#17231d;color:#d6e7d5;border:1px solid #41583b;border-radius:1
 .world-wrap{margin-top:12px}
 
 #loading-progress{width:100%;accent-color:#b6e79c} #loading-reset{min-height:44px}
+
+.legend i.mean-key{width:14px;height:2px;background:#96daca;margin-left:5px}

@@ -186,8 +186,9 @@ export class AutoPlayer {
         const interval = Math.max(game.width, game.height, Math.ceil(game.length / 16));
         if (remaining % interval === 0) {
           const food = game.food.values().next().value!;
-          const route = tileRoute(game);
-          if (route && route.directions.length < Math.min(remaining, this.cycle!.distance(game.head, food))) {
+          const before = Math.min(remaining, this.cycle!.distance(game.head, food));
+          const route = tileRoute(game, before);
+          if (route && route.directions.length < before) {
             this.bridgeEnd = 0;
             game.autoBridge = undefined;
             this.ordered = undefined;
@@ -206,7 +207,7 @@ export class AutoPlayer {
     }
     if (game.steps >= this.retryTileAt) {
       const remaining = this.route.length - this.cursor;
-      const better = tileRoute(game);
+      const better = tileRoute(game, remaining);
       if (better && better.directions.length < remaining) {
         this.cursor = 0;
         return this.cacheTileRoute(game, better);

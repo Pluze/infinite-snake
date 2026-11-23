@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScoreHistory } from './ScoreHistory';
-import { sampleHistory } from './HistorySampler';
+import { mealMean, sampleHistory } from './HistorySampler';
 import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
@@ -22,6 +22,9 @@ describe('chart envelope queries', () => {
         expect(selected).toContain(Math.max(...values));
       }
     }
+    const intervals = ScoreHistory.fromScores([0, 0, 10, 10, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(mealMean(intervals, 1)).toBe(2);
+    expect(mealMean(intervals, 10)).toBe(11 / 9);
     const long = new ScoreHistory();
     long.length = 10_000_001;
     long.changes.push([8_000_000, 10]);

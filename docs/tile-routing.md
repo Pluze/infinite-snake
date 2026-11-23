@@ -249,3 +249,34 @@ The integrated planner was run on the same six seeds. Openings collected 100 foo
 | Wrap | 50% | 246,904 | 24.140 | 298.33 | 16 | 43.13 |
 | Wrap | 90% | 45,758 | 6.064 | 59.44 | 7 | 29.99 |
 | Wrap | 98% | 25,264 | 3.876 | 162.60 | 4 | 19.66 |
+
+## Shortening a certified food route
+
+For a meal spawned at step s and eaten at t, its cost is t − s. Its stretch is that cost divided by the wall-aware or wrap-aware Manhattan distance at spawn. This is a lower bound even for a moving snake because every legal move crosses one grid edge. The in-game chart also displays cost divided by width plus height, a separate normalization independent of spawn location.
+
+A Hamiltonian cycle containing the snake in order supplies a safe continuation. Reusing such a witness across food placements has also been studied using answer set programming. A head's ability to enter a body cell depends on its arrival time and the tail's release time. Safe-interval planning models time-dependent occupancy, although Snake also moves its own obstacles and cannot wait in place. These observations motivate the certificate and release checks here. Neither paper establishes a food-efficiency optimum for this implementation. [Winning Snake](https://arxiv.org/abs/2408.08150) · [Safe Interval Path Planning](https://www.cs.cmu.edu/~maxim/files/sipp_icra11.pdf)
+
+When the free area exceeds the body length and the available certified route exceeds twice the geometric lower bound, the planner tests additional two-turn shortest paths. For a shortest route of length d, every candidate retains the same suffix of the original body at the bite. A tile alignment incompatible with that suffix can be excluded from all those checks. Boundary joins that require opposite states are indexed by their most recent conflicting body edge so a retry can reject an impossible suffix early.
+
+If the efficient geometric candidates fail, number the cells of the certified arc from the head at 0 to the food at n. Connect i to every adjacent later cell j, including the original successor. On this directed acyclic graph the exact remaining distance satisfies D(n) = 0 and D(i) = 1 + min D(j). A reverse pass solves it in O(n) time since each cell has at most four neighbors. The reconstructed route must pass both the arrival-time collision checks and a new spanning-cycle check at the bite. A failed check leaves the original route available. Optimality applies only to the graph before those extra constraints. A retry with an existing plan also stops tracing an alternative once it cannot improve the incumbent length.
+
+A straight body immediately after a bite admits an exact shortcut for scoring future access. Every off-axis target has a shortest path that moves perpendicular to the body first. Only free cells directly beyond the tail can incur a detour. Going around the body on the adjacent parallel line adds two moves, and a wrapping board may offer a shorter passage along the other direction of the same line. Summing over just that ray replaces a board-wide flood fill in this case.
+
+The walled 96 × 64 regression fixture places the head and food 80 moves apart. The old planner initially displayed a 5,730-move arc and ate after 868 actual moves as it replanned. The new planner ate in 80 actual moves. The regression advances the production controller through every move.
+
+Paired 256 × 256 runs used 13 seeds per topology. Fresh boards ran for 100 meals per seed. Constructed states at each higher occupancy ran for 16 meals per seed. Steps are totals across seeds. Peak time is the slowest individual planner call observed in Node, including runtime pauses.
+
+| Boundary | Initial fill | Previous steps | Revised steps | Previous peak (ms) | Revised peak (ms) |
+|---|---:|---:|---:|---:|---:|
+| Walls | 0% | 223,937 | 223,937 | 16.22 | 4.10 |
+| Walls | 8% | 196,561 | 195,655 | 12.83 | 14.02 |
+| Walls | 50% | 266,265 | 266,265 | 23.81 | 23.24 |
+| Walls | 90% | 101,669 | 101,669 | 7.48 | 5.13 |
+| Walls | 98% | 41,854 | 41,854 | 6.15 | 15.84 |
+| Wrap | 0% | 167,063 | 167,063 | 7.07 | 4.98 |
+| Wrap | 8% | 155,087 | 154,923 | 10.59 | 12.15 |
+| Wrap | 50% | 599,949 | 599,949 | 39.90 | 70.93 |
+| Wrap | 90% | 100,045 | 100,045 | 39.59 | 31.54 |
+| Wrap | 98% | 49,076 | 49,076 | 28.39 | 73.46 |
+
+On 96 × 64 boards grown naturally to half full (seeds 13, 71 and 317), walled runs used 2,513,148 moves versus 2,536,847 previously. Wrapped runs used 1,671,602 versus 1,709,454. Total CPU time rose from 10.98 to 12.95 seconds with walls and from 7.82 to 8.55 seconds with wrapping. Long detours remain possible. Both 64 × 64 seed-211 games reached full occupancy.

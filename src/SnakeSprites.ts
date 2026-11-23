@@ -2,9 +2,7 @@ import { Direction, Point, vectors } from './Game';
 
 export const snakePalettes = [
   { fill: '#69ca90', outline: '#357b59' }, // Jade
-  { fill: '#a5b4e8', outline: '#5d699e' }, // Periwinkle
-  { fill: '#dc99ba', outline: '#905978' }, // Dusty rose
-  { fill: '#dcc77d', outline: '#8b7943' }, // Straw gold
+  { fill: '#394b43', outline: '#28372f' }, // Repeated snake
 ];
 
 const resolution = 16;

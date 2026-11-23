@@ -298,7 +298,7 @@ function frame(now: number) {
     const state = `${game.steps},${game.dead},${running},${auto},${overlay},${cameraRevision},${renderer.width},${renderer.height},${renderer.canvas.width},${renderer.canvas.height}`;
     const changed = drawnWorld !== game || state !== drawnState;
     const due = !running || speedPower < 9 || now - lastFrame >= 32;
-    if (due && (changed || running || renderer.follow)) {
+    if (due && (changed || running || (renderer.follow && !(game.won && game.wraparound)))) {
       refreshPlan();
       renderer.render(game, plan, overlay, running, auto);
       drawnWorld = game;

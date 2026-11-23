@@ -55,7 +55,7 @@ function makeWorkspace(count: number) {
   };
 }
 const workspaces = new WeakMap<Game, ReturnType<typeof makeWorkspace>>();
-const bodyEdges = Array.from({ length: 4 }, () => new WeakMap<Game, { next: number; codes: Int32Array }>());
+const bodyEdges = Array.from({ length: 4 }, () => new WeakMap<Game, { next: number; codes: Int32Array; latest?: Float64Array; minFirst: number }>());
 
 const INVALID_EDGE = 0x7fffffff;
 function edgeCode(a: Point, b: Point, cols: number, adjacent: Int32Array) {
@@ -76,25 +76,33 @@ type Route = { directions: Direction[]; points: Point[] };
 
 // A shortest rectangular-grid path needs at most one turn on an empty
 // board. Test both elbows against tail release times and the cycle certificate.
-function* elbowRoutes(game: Game, target: Point): Generator<Route> {
+function* elbowRoutes(game: Game, target: Point, splitLeg = false): Generator<Route> {
   const delta = (value: number, size: number) => game.wraparound && Math.abs(value) * 2 > size
     ? value - Math.sign(value) * size : value;
   const dx = delta(target.x - game.head.x, game.width), dy = delta(target.y - game.head.y, game.height);
   const horizontal: Direction = dx < 0 ? 2 : 0, vertical: Direction = dy < 0 ? 3 : 1;
   const verticalFirst = game.direction === vertical;
-  elbows: for (const verticalStart of dx && dy ? [verticalFirst, !verticalFirst] : [verticalFirst]) {
-    let point = game.head;
-    const points: Point[] = [], directions: Direction[] = [];
-    for (const d of verticalStart ? [vertical, horizontal] : [horizontal, vertical]) {
-      const length = Math.abs(d === horizontal ? dx : dy);
-      for (let step = 0; step < length; step++) {
-        point = game.next(point, d);
-        if ((!points.length && !game.canMove(d)) || (game.segmentAt(point) ?? -1) >= game.first + points.length + 1) continue elbows;
-        points.push(point);
-        directions.push(d);
+  for (const verticalStart of dx && dy ? [verticalFirst, !verticalFirst] : [verticalFirst]) {
+    const first = verticalStart ? vertical : horizontal, second = verticalStart ? horizontal : vertical;
+    const a = Math.abs(verticalStart ? dy : dx), b = Math.abs(verticalStart ? dx : dy);
+    // Bisect the possible turn positions. Adjacent positions exercise both
+    // tile parities. Every generated route still attains the geometric bound.
+    const cuts = splitLeg ? new Set([1, a - 1, a >> 1, (a >> 1) + 1, a >> 2, a - (a >> 2)]) : [a];
+    cuts: for (const cut of cuts) {
+      if (splitLeg && (!b || cut <= 0 || cut >= a)) continue;
+      let point = game.head;
+      const points: Point[] = [], directions: Direction[] = [];
+      for (const [direction, length] of [[first, cut], [second, b], [first, a - cut]] as const) {
+        for (let step = 0; step < length; step++) {
+          point = game.next(point, direction);
+          if ((!points.length && !game.canMove(direction)) ||
+              (game.segmentAt(point) ?? -1) >= game.first + points.length + 1) continue cuts;
+          points.push(point);
+          directions.push(direction);
+        }
       }
+      yield { points, directions };
     }
-    yield { points, directions };
   }
 }
 
@@ -103,6 +111,26 @@ function* elbowRoutes(game: Game, target: Point): Generator<Route> {
 // for a release, so give it a finite penalty. This ranks certified routes.
 function futureDetour(game: Game, route: Route) {
   const { width, height, capacity } = game;
+  // A straight post-bite body blocks geodesics only on its own row or
+  // column. Every off-axis target has an unobstructed perpendicular-first
+  // geodesic. Behind the tail a parallel lane adds two moves; on the torus
+  // the other direction along the same line can be shorter.
+  const n = route.directions.length, direction = route.directions[n - 1];
+  if (n >= game.length) {
+    let straight = 0;
+    while (straight < game.length && route.directions[n - 1 - straight] === direction) straight++;
+    if (straight === game.length) {
+      const horizontal = direction % 2 === 0, size = horizontal ? width : height;
+      const head = route.points[n - 1], coordinate = horizontal ? head.x : head.y;
+      const behind = game.wraparound ? Math.floor((size - 1) / 2)
+        : direction < 2 ? coordinate : size - 1 - coordinate;
+      let excess = 0;
+      for (let d = game.length + 1; d <= behind; d++) {
+        excess += (game.wraparound ? Math.min(2, size - 2 * d) : 2) / d;
+      }
+      return excess;
+    }
+  }
   let buffers = accessBuffers.get(game);
   if (!buffers) {
     buffers = { distance: new Int32Array(capacity), queue: new Int32Array(capacity) };
@@ -145,7 +173,56 @@ function futureDetour(game: Game, route: Route) {
 }
 const accessBuffers = new WeakMap<Game, { distance: Int32Array; queue: Int32Array }>();
 
-export function tileRoute(game: Game): Route | undefined {
+// A simple certified arc induces a DAG: a shortcut can only point to a
+// later cell. Reverse topological order gives the minimum number of moves
+// in this graph. Replay the release times before requesting a new certificate.
+const arcBuffers = new WeakMap<Game, { ranks: Int32Array; cost: Int32Array; successor: Int32Array; heading: Uint8Array }>();
+function shortenArc(game: Game, route: Route): Route | undefined {
+  const n = route.points.length;
+  let buffers = arcBuffers.get(game);
+  if (!buffers) {
+    const size = game.capacity;
+    buffers = { ranks: new Int32Array(size), cost: new Int32Array(size + 1),
+      successor: new Int32Array(size), heading: new Uint8Array(size) };
+    arcBuffers.set(game, buffers);
+  }
+  const { ranks, cost, successor, heading } = buffers;
+  const { width, height, capacity, wraparound } = game;
+  cost[n] = 0;
+  for (let i = n; i >= 0; i--) {
+    const p = i ? route.points[i - 1] : game.head;
+    const cell = p.y * width + p.x;
+    if (i < n) {
+      cost[i] = cost[i + 1] + 1;
+      successor[i] = i + 1;
+      heading[i] = route.directions[i];
+      for (let d = 0; d < 4; d++) {
+        let next: number;
+        if (d === 0) next = p.x + 1 < width ? cell + 1 : wraparound ? cell + 1 - width : -1;
+        else if (d === 2) next = p.x ? cell - 1 : wraparound ? cell + width - 1 : -1;
+        else if (d === 1) next = p.y + 1 < height ? cell + width : wraparound ? p.x : -1;
+        else next = p.y ? cell - width : wraparound ? capacity - width + p.x : -1;
+        if (next < 0) continue;
+        const j = ranks[next];
+        if (j > i && cost[j] + 1 < cost[i] && (i !== 0 || game.canMove(d as Direction))) {
+          cost[i] = cost[j] + 1; successor[i] = j; heading[i] = d;
+        }
+      }
+    }
+    ranks[cell] = i;
+  }
+  for (const p of route.points) ranks[p.y * width + p.x] = 0;
+  if (cost[0] >= n) return;
+  const points: Point[] = [], directions: Direction[] = [];
+  for (let i = 0; i < n; i = successor[i]) {
+    const p = route.points[successor[i] - 1];
+    if ((game.segmentAt(p) ?? -1) >= game.first + points.length + 1) return;
+    directions.push(heading[i] as Direction); points.push(p);
+  }
+  return { directions, points };
+}
+
+export function tileRoute(game: Game, before = Infinity): Route | undefined {
   if (game.width % 2 || game.height % 2 || Math.min(game.width, game.height) < 4) return;
   const target = game.food.values().next().value;
   if (!target) return;
@@ -153,11 +230,14 @@ export function tileRoute(game: Game): Route | undefined {
   const certified = (board: Game, chase: Route) =>
     phases.some(phase => completeTileCycle(board, chase, 0, phase));
   const distance = boardDistance(game, game.head, target);
+  if (distance >= before) return;
   const budget = Math.min(2048, distance * 2 + 64);
   if (distance <= budget) {
     const elbows = Array.from(elbowRoutes(game, target)).filter(route => certified(game, route));
     if (elbows.length === 1) return elbows[0];
-    if (elbows.length === 2) return futureDetour(game, elbows[1]) < futureDetour(game, elbows[0]) ? elbows[1] : elbows[0];
+    if (elbows.length === 2) {
+      return futureDetour(game, elbows[1]) < futureDetour(game, elbows[0]) ? elbows[1] : elbows[0];
+    }
   }
   const candidates = routeCandidates(game, game.head, target, budget,
     (_from, to, step) => (game.segmentAt(to) ?? -1) < game.first + step, game.direction);
@@ -200,17 +280,32 @@ export function tileRoute(game: Game): Route | undefined {
       }
     }
   }
+  // Once the body is longer than the free area, a simple path through free
+  // cells cannot replace the retained body. Extra first-bite shortcuts at
+  // this stage regressed complete meal sequences in the dense fixtures.
+  const roomForChase = game.capacity - game.length > game.length;
+  // A long initial arc also bounds the later tail-release search. Preserve
+  // that witness on crowded boards even when this is an early retry.
+  const traceBound = roomForChase ? before : Infinity;
   let best: Route | undefined;
   for (const phase of phases) {
-    const route = completeTileCycle(game, undefined, 0, phase);
+    const route = completeTileCycle(game, undefined, 0, phase, Math.min(traceBound, best?.points.length ?? Infinity));
     if (route && (!best || route.points.length < best.points.length)) best = route;
   }
   const maxRelease = Math.min(game.length - 2, (best?.points.length ?? Infinity) - 2);
   // The tail will vacate these constraints before the bite. Try both the
   // geometric lower bound and a longer detour, then replay the released prefix.
-  for (const release of [distance - 1, Math.ceil(Math.sqrt(game.length * distance))]) {
-    if (release < 1 || release > maxRelease || (best && best.points.length <= 2 * distance + 8)) continue;
-    const alternative = completeTileCycle(game, undefined, release);
+  const middle = Math.ceil(Math.sqrt(game.length * distance));
+  const releases = [distance - 1, middle];
+  // A fresh meal can justify a wider search for a release time. A scheduled
+  // retry already has a live incumbent and only tests the two cheaper bounds.
+  if (roomForChase && !Number.isFinite(before)) {
+    for (let r = middle * 2; r < maxRelease; r *= 2) releases.push(r);
+    if (maxRelease > middle) releases.push(maxRelease);
+  }
+  for (const release of releases) {
+    if (release < 1 || release > maxRelease || (best && (release >= best.points.length - 1 || best.points.length <= 2 * distance + 8))) continue;
+    const alternative = completeTileCycle(game, undefined, release, 0, Math.min(traceBound, best?.points.length ?? Infinity));
     if (!alternative || alternative.points.length <= release || (best && alternative.points.length >= best.points.length)) continue;
     let safe = true;
     for (let i = 0; i < release; i++) {
@@ -218,12 +313,25 @@ export function tileRoute(game: Game): Route | undefined {
     }
     if (safe) best = alternative;
   }
+  if (!roomForChase || !best || best.points.length <= 2 * distance) return best;
+  if (distance <= budget && distance > 2) {
+    const retained = Math.min(game.length - 1, distance - 1);
+    const empty: Route = { directions: [], points: [] };
+    const compatible = phases.filter(phase => completeTileCycle(game, empty, retained, phase));
+    if (compatible.length) {
+      for (const route of elbowRoutes(game, target, true)) {
+        if (compatible.some(phase => completeTileCycle(game, route, 0, phase))) return route;
+      }
+    }
+  }
+  const short = shortenArc(game, best);
+  if (short && certified(game, short)) return short;
   return best;
 }
 
 /** Join neighboring 2x2 perimeter loops along a spanning tree. Each join
  * exchanges the two facing edges for two crossings of their shared boundary. */
-function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0): Route | undefined {
+function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0, before = Infinity): Route | undefined {
   const w = game.width, h = game.height;
   const shiftX = phase & 1, shiftY = phase >> 1;
   const local = (p: Point) => phase ? { x: (p.x + shiftX) % w, y: (p.y + shiftY) % h } : p;
@@ -236,8 +344,6 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0): R
   let workspace = workspaces.get(game);
   if (!workspace) { workspace = makeWorkspace(count); workspaces.set(game, workspace); }
   const { flags, forest, protectedEdge, deferred, parent, depth, queue } = workspace;
-  flags.fill(0);
-  forest.reset();
   const adjacent = neighbors(game);
   const neighbor = (t: number, d: number) => adjacent[4 * t + d];
   const edge = (t: number, d: number, n: number) => 2 * (d < 2 ? t : n) + (d & 1);
@@ -260,7 +366,7 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0): R
   let cached = bodyEdges[phase].get(game);
   if (!cached || cached.codes.length < game.length) {
     const size = 2 ** Math.ceil(Math.log2(game.length));
-    cached = { next: game.first + 1, codes: new Int32Array(size) };
+    cached = { next: game.first + 1, codes: new Int32Array(size), latest: game.segments.size ? new Float64Array(flags.length) : undefined, minFirst: game.first };
     bodyEdges[phase].set(game, cached);
   }
   const mask = cached.codes.length - 1;
@@ -269,11 +375,24 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0): R
     let a = local(game.segment(from - 1)!);
     for (let i = from; i < game.last; i++) {
       const b = local(game.segment(i)!);
-      cached.codes[i & mask] = edgeCode(a, b, cols, adjacent);
+      const code = edgeCode(a, b, cols, adjacent);
+      cached.codes[i & mask] = code;
+      if (code === INVALID_EDGE) cached.minFirst = i;
+      else if (code && cached.latest) {
+        // A boundary cannot simultaneously be joined and kept closed. When
+        // its sign changes, every suffix containing the previous occurrence
+        // is infeasible until that older edge has left the body.
+        const edge = Math.abs(code) - 1, previous = cached.latest[edge];
+        if (previous * Math.sign(code) < 0) cached.minFirst = Math.max(cached.minFirst, Math.abs(previous));
+        cached.latest[edge] = Math.sign(code) * i;
+      }
       a = b;
     }
     cached.next = game.last;
   }
+  if (first < cached.minFirst) return;
+  flags.fill(0);
+  forest.reset();
   for (let i = first + 1; i < game.last; i++) {
     if (!apply(cached.codes[i & mask])) return;
   }
@@ -298,7 +417,8 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0): R
     let { x, y } = local(game.head);
     const previousCell = local(game.segment(game.last - 2)!);
     let prevX = previousCell.x, prevY = previousCell.y;
-    for (let step = 0; step < game.capacity; step++) {
+    const limit = Math.min(game.capacity, before - 1);
+    for (let step = 0; step < limit; step++) {
       const t = tile(x, y);
       const east = (x & 1) === 1, south = (y & 1) === 1;
       let moved = false;

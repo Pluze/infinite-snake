@@ -2,38 +2,83 @@ import { Direction, Game, Point, vectors } from './Game';
 import { Cycle } from './TorusCycle';
 import { Plan } from './AutoPlayer';
 import { snakePalettes, SnakeSprites, toward } from './SnakeSprites';
-const copyIndex = (column: number, row: number) => (column & 1) | ((row & 1) << 1);
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private snakeSprites = new SnakeSprites();
-  // Tile parity of each segment on the continuous, unwrapped snake.
-  private winding = new Uint8Array(0);
-  private windingGame?: Game;
-  private windingEnd = 0;
-  private updateWinding(game: Game) {
-    if (!game.wraparound) {
-      if (this.windingGame) { this.windingGame = undefined; this.winding = new Uint8Array(0); }
-      return;
+  // World coordinates of the single continuous body, indexed by segment ID.
+  private lifted = new Float64Array(0);
+  private liftedGame?: Game;
+  private liftedEnd = 0;
+  private selectedCopy?: Point;
+  private victory?: { game: Game; path: Path2D; head: Point; tail: Point; minX: number; maxX: number; minY: number; maxY: number };
+
+  private updateBody(game: Game) {
+    if (this.liftedGame !== game) {
+      this.victory = undefined;
+      this.selectedCopy = undefined;
+      this.lifted = new Float64Array(0);
+      this.liftedGame = game;
     }
-    if (this.windingGame !== game || this.winding.length < game.length) {
-      this.winding = new Uint8Array(2 ** Math.ceil(Math.log2(game.length)));
-      this.windingGame = game;
-      this.windingEnd = game.first;
+    if (!game.wraparound) return;
+    if (this.lifted.length < 2 * game.length) {
+      this.lifted = new Float64Array(2 ** Math.ceil(Math.log2(game.length)) * 2);
+      this.liftedEnd = game.first;
     }
-    const start = Math.max(this.windingEnd, game.first);
-    if (start >= game.last) return;
-    // Two-cell axes draw their ambiguous edge inside the board (see toward).
-    let parity = copyIndex(game.width > 2 ? Math.floor(game.travel.x / game.width) : 0,
-      game.height > 2 ? Math.floor(game.travel.y / game.height) : 0);
+    const start = Math.max(this.liftedEnd, game.first);
+    let x = game.width > 2 ? game.travel.x : game.head.x;
+    let y = game.height > 2 ? game.travel.y : game.head.y;
     let next = game.head;
     for (let i = game.last - 1; i >= start; i--) {
       const p = game.segment(i)!;
-      if (Math.abs(p.x - next.x) > 1) parity ^= 1;
-      if (Math.abs(p.y - next.y) > 1) parity ^= 2;
-      this.winding[i % this.winding.length] = parity;
+      const dx = p.x - next.x, dy = p.y - next.y;
+      x += Math.abs(dx) > 1 ? -Math.sign(dx) : dx;
+      y += Math.abs(dy) > 1 ? -Math.sign(dy) : dy;
+      const slot = (2 * i) % this.lifted.length;
+      this.lifted[slot] = x; this.lifted[slot + 1] = y;
       next = p;
     }
-    this.windingEnd = game.last;
+    this.liftedEnd = game.last;
+  }
+
+  private fitVictory() {
+    const view = this.victory;
+    if (!view) return;
+    const usableWidth = this.width > 800 ? this.width - 260 : this.width;
+    this.scale = Math.min(24, usableWidth * .9 / (view.maxX - view.minX + 2),
+      this.height * .64 / (view.maxY - view.minY + 2));
+    this.x = (view.minX + view.maxX) / 2 + (this.width - usableWidth) / (2 * this.scale);
+    this.y = (view.minY + view.maxY) / 2 + this.height * .07 / this.scale;
+  }
+
+  private drawVictory(game: Game) {
+    if (!this.victory) {
+      const path = new Path2D();
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let head = game.head, tail = game.tail;
+      for (let i = game.first; i < game.last; i++) {
+        const slot = (2 * i) % this.lifted.length, x = this.lifted[slot], y = this.lifted[slot + 1];
+        if (i === game.first) { path.moveTo(x, y); tail = { x, y }; } else path.lineTo(x, y);
+        if (i === game.last - 1) head = { x, y };
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      this.victory = { game, path, head, tail, minX, maxX, minY, maxY };
+      this.fitVictory();
+      this.onCameraChange();
+    }
+    const { path, head, tail } = this.victory, ctx = this.ctx;
+    ctx.save();
+    ctx.translate(this.width / 2, this.height / 2);
+    ctx.scale(this.scale, this.scale); ctx.translate(-this.x, -this.y);
+    ctx.lineWidth = .55; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = snakePalettes[0].fill; ctx.stroke(path);
+    const r = Math.max(.30, 4 / this.scale);
+    ctx.fillStyle = '#d7ae82'; ctx.beginPath();
+    ctx.moveTo(tail.x, tail.y - r); ctx.lineTo(tail.x + r, tail.y);
+    ctx.lineTo(tail.x, tail.y + r); ctx.lineTo(tail.x - r, tail.y); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#17241d'; ctx.strokeStyle = '#ecf6cc'; ctx.lineWidth = Math.max(.12, 1.5 / this.scale);
+    ctx.beginPath(); ctx.arc(head.x, head.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.restore();
   }
   private overview = document.createElement('canvas');
   private overviewPattern: CanvasPattern | null = null;
@@ -63,11 +108,29 @@ export class Renderer {
       } else if (!(e.pointerType === 'touch' && this.manual)) { this.x -= (e.clientX - old.x) / this.scale; this.y -= (e.clientY - old.y) / this.scale; this.hold(); }
       pointers.set(e.pointerId, current);
     });
+    let tap: Point | undefined;
+    canvas.addEventListener('pointerdown', e => {
+      tap = pointers.size === 1 ? { x: e.clientX, y: e.clientY } : undefined;
+    });
     const release = (e: PointerEvent) => {
       if (e.type === 'pointerup' && e.pointerType === 'touch' && this.manual && touchStart && !pinched) {
         const dx = e.clientX - touchStart.x, dy = e.clientY - touchStart.y;
         if (Math.max(Math.abs(dx), Math.abs(dy)) > 18) this.onSteer(Math.abs(dx) > Math.abs(dy) ? dx > 0 ? 0 : 2 : dy > 0 ? 1 : 3);
       }
+      const game = this.liftedGame;
+      if (e.type === 'pointerup' && tap && game?.wraparound && !game.won &&
+          Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 5) {
+        const x = Math.round(this.x + (e.clientX - this.width / 2) / this.scale);
+        const y = Math.round(this.y + (e.clientY - this.height / 2) / this.scale);
+        const index = game.segmentAt(game.wrap({ x, y }));
+        if (index !== undefined) {
+          this.updateBody(game);
+          const slot = 2 * index % this.lifted.length;
+          this.selectedCopy = { x: x - this.lifted[slot], y: y - this.lifted[slot + 1] };
+          this.onCameraChange();
+        }
+      }
+      tap = undefined;
       pointers.delete(e.pointerId); if (!pointers.size) touchStart = undefined;
     };
     canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release);
@@ -105,7 +168,9 @@ export class Renderer {
     this.autozoom = false; this.hold();
   }
   recenter(game: Game, immediate = false) {
-    if (immediate) { this.x = game.travel.x; this.y = game.travel.y; }
+    this.selectedCopy = undefined;
+    if (game.won && this.victory?.game === game) this.fitVictory();
+    else if (immediate) { this.x = game.travel.x; this.y = game.travel.y; }
     else this.follow = true;
     this.manualUntil = 0;
     this.onCameraChange();
@@ -119,7 +184,7 @@ export class Renderer {
     const now = performance.now(), dt = Math.min((now - this.last) / 1000, .1); this.last = now;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const blend = reduced ? 1 : 1 - Math.exp(-dt * 5);
-    if (this.follow && now > this.manualUntil) {
+    if (!(game.won && game.wraparound) && this.follow && now > this.manualUntil) {
       const lead = running ? 3 : 1;
       const heading = vectors[game.direction];
       let lookX = heading.x * lead;
@@ -143,11 +208,17 @@ export class Renderer {
         this.scale += (target - this.scale) * (1 - Math.exp(-dt * 1.4));
       }
     }
-    this.updateWinding(game);
+    this.updateBody(game);
     const ctx = this.ctx, s = this.scale, w = this.width, h = this.height;
     ctx.fillStyle = game.wraparound ? '#101915' : '#080e0b'; ctx.fillRect(0, 0, w, h);
+    if (game.wraparound && game.won) {
+      this.drawVictory(game);
+      return;
+    }
+    const focusX = this.selectedCopy?.x ?? Math.round((this.x - (game.width > 2 ? game.travel.x : game.head.x)) / game.width) * game.width;
+    const focusY = this.selectedCopy?.y ?? Math.round((this.y - (game.height > 2 ? game.travel.y : game.head.y)) / game.height) * game.height;
     if (s < 3 || (game.wraparound && Math.min(game.width, game.height) * s < 8)) {
-      this.drawOverview(game, overlay ? plan : undefined, now);
+      this.drawOverview(game, overlay ? plan : undefined, now, focusX, focusY);
       return;
     }
     const screen = (x: number, y: number) => ({ x: (x - this.x) * s + w / 2, y: (y - this.y) * s + h / 2 });
@@ -181,17 +252,17 @@ export class Renderer {
       ctx.font = '10px monospace'; ctx.fillStyle = '#6a8d60'; ctx.textAlign = 'left';
       for (let x = Math.ceil(left / game.width) * game.width; x <= right; x += game.width) for (let y = Math.ceil(top / game.height) * game.height; y <= bottom; y += game.height) { const p = screen(x, y); ctx.fillText(`WRAP · ${game.width} × ${game.height}`, p.x + 4, p.y + 12); }
     }
-    const copies = (p: Point, draw: (x: number, y: number, copy: number) => void) => {
+    const copies = (p: Point, draw: (x: number, y: number, wx: number, wy: number) => void) => {
       if (!game.wraparound) {
         if (game.contains(p) && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
           const pos = screen(p.x, p.y);
-          draw(pos.x, pos.y, 0);
+          draw(pos.x, pos.y, p.x, p.y);
         }
         return;
       }
       for (let tx = Math.ceil((left - p.x) / game.width); tx <= Math.floor((right - p.x) / game.width); tx++)
         for (let ty = Math.ceil((top - p.y) / game.height); ty <= Math.floor((bottom - p.y) / game.height); ty++) {
-          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y, copyIndex(tx, ty));
+          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y, p.x + tx * game.width, p.y + ty * game.height);
         }
     };
     const foodPulse = running && !reduced ? (1 + Math.sin(now / 230)) / 2 : .5;
@@ -247,7 +318,7 @@ export class Renderer {
       const target = game.food.values().next().value;
       if (target) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
     }
-    const drawSegment = (index: number, point: Point, x: number, y: number, copy: number) => {
+    const drawSegment = (index: number, point: Point, x: number, y: number, wx: number, wy: number) => {
       const previous = game.segments.get(index - 1);
       const next = game.segments.get(index + 1);
       const back = previous && toward(point, previous, game.width, game.height);
@@ -259,21 +330,23 @@ export class Renderer {
         : front !== undefined
           ? { kind: 'tail' as const, facing: front }
           : { kind: 'head' as const, facing };
-      const sprite = this.snakeSprites.get(tile, game.dead && !next, copy ^ (game.wraparound ? this.winding[index % this.winding.length] : 0));
+      const slot = 2 * index % this.lifted.length;
+      const focused = !game.wraparound || (wx === this.lifted[slot] + focusX && wy === this.lifted[slot + 1] + focusY);
+      const sprite = this.snakeSprites.get(tile, focused && game.dead && !next, focused ? 0 : 1);
       // Round shared cell edges identically so fractional camera zoom leaves no gaps.
       const x0 = Math.round(x - s / 2);
       const y0 = Math.round(y - s / 2);
       ctx.drawImage(sprite, x0, y0, Math.round(x + s / 2) - x0, Math.round(y + s / 2) - y0);
     };
     if (game.length <= visibleCells) {
-      for (const [index, point] of game.segments) copies(point, (x, y, copy) => drawSegment(index, point, x, y, copy));
+      for (const [index, point] of game.segments) copies(point, (x, y, wx, wy) => drawSegment(index, point, x, y, wx, wy));
     } else {
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
         const index = game.segmentAt(point);
         if (index === undefined) continue;
         const pos = screen(x, y);
-        drawSegment(index, point, pos.x, pos.y, game.wraparound ? copyIndex(Math.floor(x / game.width), Math.floor(y / game.height)) : 0);
+        drawSegment(index, point, pos.x, pos.y, x, y);
       }
     }
     if (overlay) for (let d = 0; d < 4; d++) {
@@ -291,14 +364,14 @@ export class Renderer {
     }
 
   }
-  private drawOverview(game: Game, plan: Plan | undefined, now: number) {
+  private drawOverview(game: Game, plan: Plan | undefined, now: number, focusX: number, focusY: number) {
     const ctx = this.ctx;
     const width = game.width * this.scale, height = game.height * this.scale;
     const left = this.width / 2 - (this.x + .5) * this.scale;
     const top = this.height / 2 - (this.y + .5) * this.scale;
     if (game.wraparound && width < 1 && height < 1) {
       // Repeated cells below a pixel on both axes are represented by density.
-      ctx.fillStyle = `rgba(178, 180, 172, ${game.length / game.capacity * .45})`;
+      ctx.fillStyle = `rgba(57, 75, 67, ${game.length / game.capacity * .45})`;
       ctx.fillRect(0, 0, this.width, this.height);
       return;
     }
@@ -311,10 +384,9 @@ export class Renderer {
       this.overviewStep = game.steps;
       this.overviewAt = now;
       const cols = Math.min(512, game.width), rows = Math.min(512, game.height);
-      const copies = game.wraparound ? 2 : 1;
       if (newGame) {
-        tile.width = cols * copies;
-        tile.height = rows * copies;
+        tile.width = cols;
+        tile.height = rows;
       }
       const raster = tile.getContext('2d')!;
       raster.fillStyle = '#101915';
@@ -337,34 +409,29 @@ export class Renderer {
           plot(cycle.point((start + length) % cycle.size));
         }
       }
-      // Draw the shared route layer once, then color each continuous snake copy.
-      for (let row = 0; row < copies; row++) for (let col = 0; col < copies; col++) {
-        if (row || col) raster.drawImage(tile, 0, 0, cols, rows, col * cols, row * rows, cols, rows);
-      }
       const stride = Math.max(1, Math.ceil(game.length / 32_768));
-      for (let row = 0; row < copies; row++) for (let col = 0; col < copies; col++) {
-        const copy = copyIndex(col, row);
-        raster.save();
-        raster.translate(col * cols, row * rows);
-        const segment = (index: number) => {
-          const winding = game.wraparound ? this.winding[index % this.winding.length] : 0;
-          raster.fillStyle = snakePalettes[copy ^ winding].fill;
-          plot(game.segment(index)!);
-        };
-        for (let i = game.first; i < game.last; i += stride) segment(i);
-        segment(game.last - 1);
-        raster.fillStyle = '#f4b37c';
-        for (const food of game.food.values()) plot(food);
-        raster.restore();
-      }
+      raster.fillStyle = snakePalettes[game.wraparound ? 1 : 0].fill;
+      for (let i = game.first; i < game.last; i += stride) plot(game.segment(i)!);
+      plot(game.head);
+      raster.fillStyle = '#f4b37c';
+      for (const food of game.food.values()) plot(food);
       this.overviewPattern = game.wraparound ? ctx.createPattern(tile, 'repeat') : null;
     }
     const pattern = this.overviewPattern;
     if (pattern) {
-      const x = width < 1 ? 0 : left % (2 * width), y = height < 1 ? 0 : top % (2 * height);
-      pattern.setTransform(new DOMMatrix([2 * Math.max(1, width) / tile.width, 0, 0, 2 * Math.max(1, height) / tile.height, x, y]));
+      const x = width < 1 ? 0 : left % width, y = height < 1 ? 0 : top % height;
+      pattern.setTransform(new DOMMatrix([Math.max(1, width) / tile.width, 0, 0, Math.max(1, height) / tile.height, x, y]));
       ctx.fillStyle = pattern;
       ctx.fillRect(0, 0, this.width, this.height);
+      ctx.fillStyle = snakePalettes[0].fill;
+      const stride = Math.max(1, Math.ceil(game.length / 32_768));
+      const dot = (index: number) => {
+        const slot = 2 * index % this.lifted.length;
+        ctx.fillRect(left + (this.lifted[slot] + focusX) * this.scale,
+          top + (this.lifted[slot + 1] + focusY) * this.scale, this.scale, this.scale);
+      };
+      for (let i = game.first; i < game.last; i += stride) dot(i);
+      dot(game.last - 1);
     } else if (!game.wraparound && width >= .5 && height >= .5) {
       ctx.drawImage(tile, left, top, width, height);
     }
