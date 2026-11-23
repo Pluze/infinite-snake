@@ -485,7 +485,7 @@ test('a full wrapped board shows a single fitted snake and keeps manual zoom', a
   expect(result.copy).toEqual([16, 25, 21]);
 });
 
-test('meal chart positions bites by log food count and inspects the matching median', async ({ page }) => {
+test('meal chart spaces bites evenly by food count and inspects the matching median', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#loading')).toBeHidden();
   await page.waitForFunction(() => performance.now() > 500);
@@ -499,10 +499,10 @@ test('meal chart positions bites by log food count and inspects the matching med
     new Charts().render(game);
     const svg = document.querySelector<SVGSVGElement>('#efficiency-chart svg')!;
     const rect = svg.getBoundingClientRect();
-    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: rect.left + rect.width * 182.90 / 330 }));
+    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: rect.left + rect.width * 152 / 330 }));
     return svg.querySelector('[data-series="meal-median"]')!.getAttribute('d');
   });
-  expect(path).toMatch(/^M34\.00,[\d.]+ L182\.90,[\d.]+ L270\.00,/);
+  expect(path).toMatch(/^M34\.00,[\d.]+ L152\.00,[\d.]+ L270\.00,/);
   await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Food #2 · Step 100 · 90 steps to food · 1.07× (width + height) · Median 50 steps · 0.595× (width + height)');
 });
 

@@ -32,16 +32,15 @@ export function sampleHistory(history: ScoreHistory, start: number, growth: bool
     return [...selected].map(step => ({ x: step, score: initialLength + history.at(step) / 10 }));
   }
 
-  // Sample the same log food-count axis that is used to draw the chart.
+  // Sample the same linear food-count axis that is used to draw the chart.
   const changes = history.changes;
   const first = Math.max(1, start);
   if (first >= changes.length) return [];
   const selected = new Set([first, changes.length - 1]);
-  const logStart = Math.log(first);
-  const logWidth = Math.log(Math.max(first + 1, changes.length - 1) / first) / buckets;
+  const width = Math.ceil((changes.length - first) / buckets);
   let bucket = -1, low = first, high = first, lowMedian = first, highMedian = first;
   for (let i = first; i < changes.length; i++) {
-    const current = Math.floor((Math.log(i) - logStart) / logWidth);
+    const current = Math.floor((i - first) / width);
     if (current !== bucket) {
       selected.add(low); selected.add(high); selected.add(lowMedian); selected.add(highMedian);
       low = high = lowMedian = highMedian = i; bucket = current;
