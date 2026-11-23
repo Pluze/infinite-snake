@@ -389,7 +389,9 @@ test('autoplay ignores a legacy growth preference', async ({ page }) => {
   await expect.poll(async () => Number(await page.locator('#board').getAttribute('data-steps'))).toBeGreaterThan(0);
   await page.reload();
   await expect(page.locator('#loading')).toBeHidden();
-  await expect(page.locator('#mode-auto')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#growth')).toHaveCount(0);
+  const settings = await page.evaluate(() => JSON.parse(localStorage.getItem('snake-torus-settings-v2')!));
+  expect(settings).not.toHaveProperty('growth');
 });
 
 test('movement keys take over focused controls and accelerate straight ahead', async ({ page }) => {
