@@ -388,3 +388,24 @@ test('growth preference replans during autoplay and survives a reload', async ({
   await expect(page.locator('#growth')).toBeChecked();
   await page.locator('#growth').uncheck();
 });
+
+test('movement keys take over focused controls and accelerate straight ahead', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  const speed = page.locator('#speed'), board = page.locator('#board');
+  await speed.fill('0');
+  await speed.focus();
+  await page.keyboard.press('ArrowRight');
+  expect(await speed.inputValue()).toBe('0');
+  expect(await board.getAttribute('data-steps')).toBe('1');
+  await page.locator('#play').focus();
+  await page.keyboard.down('d');
+  await page.keyboard.down('d');
+  await page.keyboard.up('d');
+  expect(await board.getAttribute('data-steps')).toBe('3');
+  await menu(page);
+  await page.locator('#new-game').click();
+  await page.keyboard.press('d');
+  await expect(page.locator('#restart-dialog')).toBeHidden();
+  expect(await board.getAttribute('data-steps')).toBe('4');
+});

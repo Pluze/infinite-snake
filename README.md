@@ -6,7 +6,7 @@ A classic, manually controlled Snake game on a repeating **torus**, with a **64 
 
 ## Play
 
-- **Arrow keys or WASD:** turn and start/resume play. The game starts in manual mode. Direct reversals are ignored.
+- **Arrow keys or WASD:** steer from any focused control and start/resume play. Press the current heading to move one step immediately, or hold it for repeated extra steps. A movement key dismisses an open menu or dialog and returns to the current game. The game starts in manual mode. Direct reversals are ignored.
 - **Space / Play button:** start or pause.
 - **Mobile:** swipe on the board or use the direction pad to turn and start. Pinch with two fingers to zoom. Open Controls for settings.
 - **New game dimensions:** choose Small (32 × 24), Standard (64 × 48), or Large (96 × 64), or enter a custom width and height as positive whole numbers, up to 4,294,967,295 cells in total. The game indexes large boards without allocating a cell array for the whole world. The dialog previews total cells. Dimensions apply only to the new run and are restored with its save. Invalid input leaves the current run intact.

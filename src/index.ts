@@ -81,13 +81,16 @@ function toggle() {
   if (!running) { saver.markDirty(); saver.flush(); } ui();
 }
 function mode(isAuto: boolean) { forecast?.worker?.terminate(); forecast = undefined; previewStep = -1; auto = isAuto; if (!auto) speedPower = Math.min(speedPower, 9); pendingDirections = []; bot.reset(); plan = { directions: [], points: [], safe: true, reason: '' }; message = ''; settings(); ui(); }
-function steer(d: Direction) {
+function steer(d: Direction, advanceStraight = false) {
   if (!ready || busy || game.dead || game.won) return;
   if (auto) mode(false);
   if (!running && document.body.classList.contains('warning')) { pendingDirections = []; document.body.classList.remove('warning'); }
+  const immediate = advanceStraight && d === game.direction;
+  if (immediate) pendingDirections = [];
   const last = pendingDirections[pendingDirections.length - 1] ?? game.direction;
   if ((game.length === 1 || d !== (last + 2) % 4) && d !== last && pendingDirections.length < 3) pendingDirections.push(d);
   message = ''; if (!running) { running = true; credit = 0; lastTick = performance.now(); }
+  if (immediate && move()) saver.markDirty();
   $('board').focus({ preventScroll: true }); ui();
 }
 function move() {
@@ -208,12 +211,22 @@ document.querySelectorAll<HTMLButtonElement>('[data-mobile]').forEach(button => 
 });
 document.querySelectorAll<HTMLButtonElement>('[data-dir]').forEach(button => button.onpointerdown = e => { e.preventDefault(); steer(Number(button.dataset.dir) as Direction); });
 const keys: Record<string, Direction> = { ArrowRight: 0, d: 0, ArrowDown: 1, s: 1, ArrowLeft: 2, a: 2, ArrowUp: 3, w: 3 };
+window.addEventListener('keydown', e => {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (!Object.prototype.hasOwnProperty.call(keys, key) || e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (!ready || busy || game.dead || game.won) return;
+  if (e.repeat && keys[key] !== game.direction) return;
+  document.querySelector<HTMLDialogElement>('dialog[open]')?.close();
+  if (!$('menu').hidden) closeMenu();
+  steer(keys[key], true);
+}, { capture: true });
 document.addEventListener('keydown', e => {
   if (!$('menu').hidden) { if (e.key === 'Escape') { e.preventDefault(); closeMenu(); } return; }
   if ((e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) || document.querySelector('dialog[open]')) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (k in keys) { e.preventDefault(); if (!e.repeat) steer(keys[k]); }
-  else if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement && (game.dead || game.won))) { e.preventDefault(); if (!e.repeat) toggle(); }
+  if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement && (game.dead || game.won))) { e.preventDefault(); if (!e.repeat) toggle(); }
   else if (k === 'f') heldF = true;
   else if (k === 'c') renderer.recenter(game);
 });
