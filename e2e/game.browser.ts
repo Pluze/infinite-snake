@@ -351,7 +351,7 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await expect(page.locator('#growth-chart svg circle')).toHaveAttribute('cx', '270');
   await expect(page.locator('#efficiency-summary')).toHaveText('1 step');
   await page.locator('#efficiency-chart svg circle').hover();
-  await expect(page.locator('#efficiency-chart .chart-tooltip')).toHaveText('Step 1 · 1 step to food');
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toHaveText('Step 1 · 1 step to food · 0.333× (width + height)');
   await page.locator('#growth-chart svg circle').hover();
   await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
