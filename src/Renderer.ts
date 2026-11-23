@@ -1,7 +1,7 @@
 import { Direction, Game, Point, vectors } from './Game';
 import { Cycle } from './TorusCycle';
 import { Plan } from './AutoPlayer';
-import { SnakeSprites, toward } from './SnakeSprites';
+import { jade, periwinkle, SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private snakeSprites = new SnakeSprites();
@@ -150,17 +150,17 @@ export class Renderer {
       ctx.font = '10px monospace'; ctx.fillStyle = '#6a8d60'; ctx.textAlign = 'left';
       for (let x = Math.ceil(left / game.width) * game.width; x <= right; x += game.width) for (let y = Math.ceil(top / game.height) * game.height; y <= bottom; y += game.height) { const p = screen(x, y); ctx.fillText(`WRAP · ${game.width} × ${game.height}`, p.x + 4, p.y + 12); }
     }
-    const copies = (p: Point, draw: (x: number, y: number) => void) => {
+    const copies = (p: Point, draw: (x: number, y: number, alternate: boolean) => void) => {
       if (!game.wraparound) {
         if (game.contains(p) && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
           const pos = screen(p.x, p.y);
-          draw(pos.x, pos.y);
+          draw(pos.x, pos.y, false);
         }
         return;
       }
       for (let tx = Math.ceil((left - p.x) / game.width); tx <= Math.floor((right - p.x) / game.width); tx++)
         for (let ty = Math.ceil((top - p.y) / game.height); ty <= Math.floor((bottom - p.y) / game.height); ty++) {
-          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y);
+          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y, ((tx + ty) & 1) === 1);
         }
     };
     const foodPulse = running && !reduced ? (1 + Math.sin(now / 230)) / 2 : .5;
@@ -216,7 +216,7 @@ export class Renderer {
       const target = game.food.values().next().value;
       if (target) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
     }
-    const drawSegment = (index: number, point: Point, x: number, y: number) => {
+    const drawSegment = (index: number, point: Point, x: number, y: number, alternate: boolean) => {
       const previous = game.segments.get(index - 1);
       const next = game.segments.get(index + 1);
       const back = previous && toward(point, previous, game.width, game.height);
@@ -228,21 +228,21 @@ export class Renderer {
         : front !== undefined
           ? { kind: 'tail' as const, facing: front }
           : { kind: 'head' as const, facing };
-      const sprite = this.snakeSprites.get(tile, game.dead && !next);
+      const sprite = this.snakeSprites.get(tile, game.dead && !next, alternate);
       // Round shared cell edges identically so fractional camera zoom leaves no gaps.
       const x0 = Math.round(x - s / 2);
       const y0 = Math.round(y - s / 2);
       ctx.drawImage(sprite, x0, y0, Math.round(x + s / 2) - x0, Math.round(y + s / 2) - y0);
     };
     if (game.length <= visibleCells) {
-      for (const [index, point] of game.segments) copies(point, (x, y) => drawSegment(index, point, x, y));
+      for (const [index, point] of game.segments) copies(point, (x, y, alternate) => drawSegment(index, point, x, y, alternate));
     } else {
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
         const index = game.segmentAt(point);
         if (index === undefined) continue;
         const pos = screen(x, y);
-        drawSegment(index, point, pos.x, pos.y);
+        drawSegment(index, point, pos.x, pos.y, game.wraparound && ((Math.floor(x / game.width) + Math.floor(y / game.height)) & 1) === 1);
       }
     }
     if (overlay) for (let d = 0; d < 4; d++) {
@@ -267,7 +267,7 @@ export class Renderer {
     const top = this.height / 2 - (this.y + .5) * this.scale;
     if (game.wraparound && width < 1 && height < 1) {
       // Repeated cells below a pixel on both axes are represented by density.
-      ctx.fillStyle = `rgba(104, 201, 148, ${game.length / game.capacity * .45})`;
+      ctx.fillStyle = `rgba(135, 191, 188, ${game.length / game.capacity * .45})`;
       ctx.fillRect(0, 0, this.width, this.height);
       return;
     }
@@ -279,15 +279,17 @@ export class Renderer {
       this.overviewOverlay = showPath;
       this.overviewStep = game.steps;
       this.overviewAt = now;
+      const cols = Math.min(512, game.width), rows = Math.min(512, game.height);
+      const copies = game.wraparound ? 2 : 1;
       if (newGame) {
-        tile.width = Math.min(512, game.width);
-        tile.height = Math.min(512, game.height);
+        tile.width = cols * copies;
+        tile.height = rows * copies;
       }
       const raster = tile.getContext('2d')!;
       raster.fillStyle = '#101915';
       raster.fillRect(0, 0, tile.width, tile.height);
-      const plot = (p: Point) => raster.fillRect(Math.floor(p.x * tile.width / game.width),
-        Math.floor(p.y * tile.height / game.height), 1, 1);
+      const plot = (p: Point, offset = 0) => raster.fillRect(offset + Math.floor(p.x * cols / game.width),
+        Math.floor(p.y * rows / game.height), 1, 1);
       const path = plan?.path;
       raster.fillStyle = '#466647';
       if (path && 'cycle' in path) {
@@ -304,18 +306,28 @@ export class Renderer {
           plot(cycle.point((start + length) % cycle.size));
         }
       }
-      raster.fillStyle = '#68c994';
+      // Build one 2-by-2 repeat. Share the route and food between both palettes.
+      if (game.wraparound) raster.drawImage(tile, 0, 0, cols, rows, cols, 0, cols, rows);
       const stride = Math.max(1, Math.ceil(game.length / 32_768));
-      for (let i = game.first; i < game.last; i += stride) plot(game.segments.get(i)!);
-      plot(game.head);
-      raster.fillStyle = '#f4b37c';
-      for (const food of game.food.values()) plot(food);
+      for (let column = 0; column < copies; column++) {
+        const offset = column * cols;
+        raster.fillStyle = column === 0 ? jade.fill : periwinkle.fill;
+        for (let i = game.first; i < game.last; i += stride) plot(game.segments.get(i)!, offset);
+        plot(game.head, offset);
+        // Keep food visible when several logical cells share a raster pixel.
+        raster.fillStyle = '#f4b37c';
+        for (const food of game.food.values()) plot(food, offset);
+      }
+      if (game.wraparound) {
+        raster.drawImage(tile, cols, 0, cols, rows, 0, rows, cols, rows);
+        raster.drawImage(tile, 0, 0, cols, rows, cols, rows, cols, rows);
+      }
       this.overviewPattern = game.wraparound ? ctx.createPattern(tile, 'repeat') : null;
     }
     const pattern = this.overviewPattern;
     if (pattern) {
-      const x = width < 1 ? 0 : left % width, y = height < 1 ? 0 : top % height;
-      pattern.setTransform(new DOMMatrix([Math.max(1, width) / tile.width, 0, 0, Math.max(1, height) / tile.height, x, y]));
+      const x = width < 1 ? 0 : left % (2 * width), y = height < 1 ? 0 : top % (2 * height);
+      pattern.setTransform(new DOMMatrix([2 * Math.max(1, width) / tile.width, 0, 0, 2 * Math.max(1, height) / tile.height, x, y]));
       ctx.fillStyle = pattern;
       ctx.fillRect(0, 0, this.width, this.height);
     } else if (!game.wraparound && width >= .5 && height >= .5) {

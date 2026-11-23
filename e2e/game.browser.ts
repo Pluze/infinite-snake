@@ -409,3 +409,30 @@ test('movement keys take over focused controls and accelerate straight ahead', a
   await expect(page.locator('#restart-dialog')).toBeHidden();
   expect(await board.getAttribute('data-steps')).toBe('4');
 });
+
+test('wrap copies alternate snake colors across both seams at detail and overview scales', async ({ page }) => {
+  await page.goto('/');
+  const samples = await page.evaluate(async () => {
+    const gameModule = '/src/Game.ts', rendererModule = '/src/Renderer.ts';
+    const { Game } = await import(gameModule);
+    const { Renderer } = await import(rendererModule);
+    const canvas = document.createElement('canvas'), renderer = new Renderer(canvas);
+    const ctx = canvas.getContext('2d')!;
+    const game = new Game(42, 9, 7);
+    const samples: string[][] = [];
+    for (const scale of [16, 2]) {
+      renderer.scale = scale;
+      renderer.x = -7;
+      renderer.y = 7;
+      renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
+      samples.push([[-1, 1], [0, 1], [-1, 0], [0, 0]].map(([tx, ty]) => {
+        const x = innerWidth / 2 + (2 + tx * game.width - renderer.x) * scale;
+        const y = innerHeight / 2 + (ty * game.height - renderer.y) * scale;
+        return [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3).join(',');
+      }));
+    }
+    return samples;
+  });
+  const checker = ['105,202,144', '165,180,232', '165,180,232', '105,202,144'];
+  expect(samples).toEqual([checker, checker]);
+});

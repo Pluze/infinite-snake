@@ -1,5 +1,8 @@
 import { Direction, Point, vectors } from './Game';
 
+export const jade = { fill: '#69ca90', outline: '#357b59' };
+export const periwinkle = { fill: '#a5b4e8', outline: '#5d699e' };
+
 const resolution = 16;
 const bodyRadius = .32;
 
@@ -10,11 +13,12 @@ type Tile =
 export class SnakeSprites {
   private cache = new Map<string, HTMLCanvasElement>();
 
-  get(tile: Tile, dead: boolean) {
+  get(tile: Tile, dead: boolean, alternate: boolean) {
     const key = tile.kind === 'body'
       ? `body:${tile.back}:${tile.front}`
       : `${tile.kind}:${tile.facing}:${dead}`;
-    const cached = this.cache.get(key);
+    const cacheKey = alternate && !dead ? key + ':alternate' : key;
+    const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
     const sprite = document.createElement('canvas');
@@ -23,8 +27,7 @@ export class SnakeSprites {
     const facing = vectors[tile.kind === 'body' ? tile.front : tile.facing];
     const back = tile.kind === 'body' ? vectors[tile.back] : undefined;
     const bend = back && back.x * facing.x + back.y * facing.y === 0;
-    const fill = dead ? '#e39b83' : '#69ca90';
-    const outline = dead ? '#9f594c' : '#357b59';
+    const { fill, outline } = dead ? { fill: '#e39b83', outline: '#9f594c' } : alternate ? periwinkle : jade;
 
     for (let row = 0; row < resolution; row++) {
       for (let col = 0; col < resolution; col++) {
@@ -57,7 +60,7 @@ export class SnakeSprites {
         ctx.fillRect(col, row, 1, 1);
       }
     }
-    this.cache.set(key, sprite);
+    this.cache.set(cacheKey, sprite);
     return sprite;
   }
 }
