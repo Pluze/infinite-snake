@@ -31,7 +31,7 @@ const adjacency = new WeakMap<Game, Int32Array>();
 function neighbors(game: Game) {
   let result = adjacency.get(game);
   if (result) return result;
-  const cols = game.width / 2, rows = game.height / 2, count = cols * rows;
+  const cols = game.width >> 1, rows = game.height >> 1, count = cols * rows;
   result = new Int32Array(4 * count);
   for (let t = 0; t < count; t++) {
     const x = t % cols, y = Math.floor(t / cols);
@@ -55,7 +55,7 @@ function makeWorkspace(count: number) {
   };
 }
 const workspaces = new WeakMap<Game, ReturnType<typeof makeWorkspace>>();
-const bodyEdges = Array.from({ length: 4 }, () => new WeakMap<Game, { next: number; codes: Int32Array; latest?: Float64Array; minFirst: number }>());
+const bodyEdges = Array.from({ length: 5 }, () => new WeakMap<Game, { next: number; codes: Int32Array; latest?: Float64Array; minFirst: number }>());
 
 const INVALID_EDGE = 0x7fffffff;
 function edgeCode(a: Point, b: Point, cols: number, adjacent: Int32Array) {
@@ -70,6 +70,30 @@ function edgeCode(a: Point, b: Point, cols: number, adjacent: Int32Array) {
   if (other < 0) return 0;
   const code = 1 + 2 * (d < 2 ? t : other) + (d & 1);
   return crosses ? code : -code;
+}
+
+// Along an odd walled dimension, stretch the outermost 2x2 loops
+// to 2x3 (or 3x2). Each outer edge becomes a three-edge U. Joins on the
+// other tile boundaries still exchange exactly the same pairs of edges.
+function perimeterCode(a: Point, b: Point, cols: number, adjacent: Int32Array, extraX: number, extraY: number) {
+  if ((a.x === extraX && a.y === extraY) || (b.x === extraX && b.y === extraY)) return INVALID_EDGE;
+  if ((extraX >= 0 || extraY >= 0) && Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) return INVALID_EDGE;
+  if (a.x === extraX || b.x === extraX) {
+    if (a.x !== b.x || (a.y >> 1) === (b.y >> 1)) return 0;
+    return INVALID_EDGE;
+  }
+  if (a.y === extraY || b.y === extraY) {
+    if (a.y !== b.y || (a.x >> 1) === (b.x >> 1)) return 0;
+    return INVALID_EDGE;
+  }
+  if ((a.x === extraX - 1 && b.x === a.x && (a.y >> 1) === (b.y >> 1))
+    || (a.y === extraY - 1 && b.y === a.y && (a.x >> 1) === (b.x >> 1))) return INVALID_EDGE;
+  return edgeCode(a, b, cols, adjacent);
+}
+
+export function supportsTileRoute(game: Game) {
+  return game.wraparound ? Math.min(game.width, game.height) >= 4 && ((game.width | game.height) & 1) === 0
+    : Math.min(game.width, game.height) >= 2;
 }
 
 type Route = { directions: Direction[]; points: Point[] };
@@ -223,10 +247,10 @@ function shortenArc(game: Game, route: Route): Route | undefined {
 }
 
 export function tileRoute(game: Game, before = Infinity): Route | undefined {
-  if (game.width % 2 || game.height % 2 || Math.min(game.width, game.height) < 4) return;
+  if (!supportsTileRoute(game)) return;
   const target = game.food.values().next().value;
   if (!target) return;
-  const phases = game.wraparound ? [0, 1, 2, 3] : [0];
+  const phases = game.wraparound ? [0, 1, 2, 3] : (game.width & game.height & 1) ? [0, 4] : [0];
   const certified = (board: Game, chase: Route) =>
     phases.some(phase => completeTileCycle(board, chase, 0, phase));
   const distance = boardDistance(game, game.head, target);
@@ -264,7 +288,7 @@ export function tileRoute(game: Game, before = Infinity): Route | undefined {
       if (workspace) workspaces.set(fork, workspace);
       if (chase.directions.every(d => fork.step(d))) {
         let budgetLeft = Math.min(8192, 4 * game.length + budget);
-        while (budgetLeft > 0) {
+        continuation: while (budgetLeft > 0) {
           const next = fork.food.values().next().value;
           if (!next) break;
           const allowance = Math.min(budgetLeft, 2 * boardDistance(fork, fork.head, next) + 64);
@@ -272,7 +296,7 @@ export function tileRoute(game: Game, before = Infinity): Route | undefined {
           const path = searchRoute(fork, fork.head, next, allowance, (_from, to) => !fork.isOccupied(to), fork.direction);
           if (!path) break;
           for (let i = 1; i < path.length; i++) {
-            if (!fork.step(path[i].d)) return;
+            if (!fork.step(path[i].d)) break continuation;
             chase.points.push(fork.head); chase.directions.push(path[i].d);
           }
           if (fork.won || certified(fork, { directions: [], points: [] })) return chase;
@@ -334,13 +358,20 @@ export function tileRoute(game: Game, before = Infinity): Route | undefined {
 function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0, before = Infinity): Route | undefined {
   const w = game.width, h = game.height;
   const shiftX = phase & 1, shiftY = phase >> 1;
-  const local = (p: Point) => phase ? { x: (p.x + shiftX) % w, y: (p.y + shiftY) % h } : p;
-  const world = (x: number, y: number) => phase ? { x: (x + w - shiftX) % w, y: (y + h - shiftY) % h } : { x, y };
+  // The two diagonal cells have the same two neighbors on the perimeter
+  // of the southeast tile. Swapping them moves the omitted cell.
+  const swapCorner = (p: Point) => p.x === w - 1 && p.y === h - 1 ? { x: w - 2, y: h - 2 }
+    : p.x === w - 2 && p.y === h - 2 ? { x: w - 1, y: h - 1 } : p;
+  const local = (p: Point) => phase === 4 ? swapCorner(p) : phase ? { x: (p.x + shiftX) % w, y: (p.y + shiftY) % h } : p;
+  const world = (x: number, y: number) => phase === 4 ? swapCorner({ x, y }) : phase ? { x: (x + w - shiftX) % w, y: (y + h - shiftY) % h } : { x, y };
   const target = game.food.values().next().value;
-  const food = target && local(target);
-  if (!food || w % 2 || h % 2 || w < 4 || h < 4 || game.length < 2) return;
-  const cols = w / 2, count = cols * (h / 2);
-  const tile = (x: number, y: number) => (y >> 1) * cols + (x >> 1);
+  let food = target && local(target);
+  const switchAtBite = (w & h & 1) && food?.x === w - 1 && food.y === h - 1;
+  if (switchAtBite && !chase) food = { x: w - 2, y: h - 2 };
+  if (!food || game.length < 2) return;
+  const cols = w >> 1, rows = h >> 1, count = cols * rows;
+  const extraX = (w & 1) ? w - 1 : -1, extraY = (h & 1) ? h - 1 : -1;
+  const tile = (x: number, y: number) => Math.min(y >> 1, rows - 1) * cols + Math.min(x >> 1, cols - 1);
   let workspace = workspaces.get(game);
   if (!workspace) { workspace = makeWorkspace(count); workspaces.set(game, workspace); }
   const { flags, forest, protectedEdge, deferred, parent, depth, queue } = workspace;
@@ -375,7 +406,7 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0, be
     let a = local(game.segment(from - 1)!);
     for (let i = from; i < game.last; i++) {
       const b = local(game.segment(i)!);
-      const code = edgeCode(a, b, cols, adjacent);
+      const code = perimeterCode(a, b, cols, adjacent, extraX, extraY);
       cached.codes[i & mask] = code;
       if (code === INVALID_EDGE) cached.minFirst = i;
       else if (code && cached.latest) {
@@ -399,7 +430,7 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0, be
   let previous = segment(Math.max(first, game.last - 1));
   for (let i = Math.max(first + 1, game.last); i < game.last + moves; i++) {
     const p = segment(i);
-    if (!apply(edgeCode(previous, p, cols, adjacent))) return;
+    if (!apply(perimeterCode(previous, p, cols, adjacent, extraX, extraY))) return;
     previous = p;
   }
   if (chase) {
@@ -426,18 +457,34 @@ function completeTileCycle(game: Game, chase?: Route, release = 0, phase = 0, be
         const side = arm ? (south ? 1 : 3) : (east ? 0 : 2);
         const n = neighbor(t, side), id = edge(t, side, n);
         const joined = n >= 0 && flags[id] === 1;
-        const d = (joined ? side : arm ? (east ? 2 : 0) : (south ? 3 : 1)) as Direction;
+        let d = (joined ? side : arm ? (east ? 2 : 0) : (south ? 3 : 1)) as Direction;
+        if (x === extraX) d = arm ? 2 : (south ? 3 : 1);
+        else if (y === extraY) d = arm ? 3 : (east ? 2 : 0);
+        else if (!joined && side === 0 && x === extraX - 1) d = 0;
+        else if (!joined && side === 1 && y === extraY - 1) d = 1;
         let nx = x, ny = y;
         if (d === 0) nx = x + 1 === w ? 0 : x + 1;
         else if (d === 2) nx = x === 0 ? w - 1 : x - 1;
         else if (d === 1) ny = y + 1 === h ? 0 : y + 1;
         else ny = y === 0 ? h - 1 : y - 1;
         if (nx === prevX && ny === prevY) continue;
-        if (!joined && n >= 0) {
+        if (!joined && n >= 0 && x !== extraX && y !== extraY) {
           if (visit && !flags[id]) visit(n, id, step, side, south ? (east ? 2 : 3) : (east ? 1 : 0));
           else if (protect) protectedEdge[id] = 1;
         }
-        if (!protect && !visit) { directions.push(d); points.push(world(nx, ny)); }
+        if (!protect && !visit) {
+          const terminalSwap = switchAtBite && nx === food!.x && ny === food!.y;
+          const p = terminalSwap ? target! : world(nx, ny);
+          if (phase === 4 || terminalSwap) {
+            const from = points[points.length - 1] ?? game.head;
+            d = p.x > from.x ? 0 : p.x < from.x ? 2 : p.y > from.y ? 1 : 3;
+          }
+          if (terminalSwap && game.length + 1 < game.capacity) {
+            const twin = world(nx, ny);
+            if ((game.segmentAt(twin) ?? -1) >= game.first + step) return;
+          }
+          directions.push(d); points.push(p);
+        }
         prevX = x; prevY = y; x = nx; y = ny; moved = true; break;
       }
       if (!moved) return;

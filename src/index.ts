@@ -96,7 +96,11 @@ function steer(d: Direction, advanceStraight = false) {
 }
 function move() {
   const next = auto ? bot.nextMove(game) : undefined;
-  const d = next?.direction ?? (auto ? game.direction : pendingDirections[0] ?? game.direction);
+  if (next && next.direction === undefined) {
+    pause(`Autoplay stopped: ${next.reason}. Switch to Manual or start a new game.`);
+    return false;
+  }
+  const d = next?.direction ?? pendingDirections[0] ?? game.direction;
   if (checkbox('risk').checked && (!game.canMove(d) || (next && !next.safe))) {
     document.body.classList.add('warning'); pause(`Risk pause: ${next && !next.safe ? next.reason : game.contains(game.next(game.head, d)) ? 'your body is directly ahead' : 'a wall is directly ahead'}. Turn or disable Pause before risk to continue.`); return false;
   }

@@ -17,8 +17,8 @@ function savedBoard(seed: number, w: number, h: number, wrap: boolean) {
 }
 
 it('completes games using only certified tile routes', () => {
-  for (const wrap of [false, true]) for (const seed of [7, 42, 113]) {
-    const game = new Game(seed, 16, 12, wrap);
+  for (const [w, h, wrap] of [[16, 12, true], [16, 12, false], [16, 13, false], [13, 16, false], [15, 13, false]] as const) for (const seed of [7, 42, 113]) {
+    const game = new Game(seed, w, h, wrap);
     while (!game.won) {
       const route = tileRoute(game);
       if (!route?.directions.length) throw Error('Lost the spanning cycle');
@@ -151,4 +151,19 @@ it('takes an 80-step certified geodesic past a long walled sweep', () => {
   }
   expect(game.head).toEqual(food);
   expect(game.score).toBe(10);
+});
+
+it('reaches every last food on odd walled boards without looping in recovery', () => {
+  for (const [width, height, seed] of [[37, 37, 42], [37, 41, 91], [15, 21, 42], [9, 9, 91], [7, 5, 999], [5, 7, 113], [3, 37, 42], [37, 3, 91], [2, 37, 42], [37, 2, 91]]) {
+    const game = new Game(seed, width, height, false), bot = new AutoPlayer();
+    let lastMeal = 0;
+    while (!game.won) {
+      const move = bot.nextMove(game);
+      if (!move.safe || move.direction === undefined || !game.step(move.direction)) throw Error('Autoplay lost its escape');
+      bot.advance(game);
+      if (game.score !== game.scores.at(game.steps - 1)) lastMeal = game.steps;
+      if (game.steps - lastMeal > game.capacity * 2) throw Error('Autoplay stopped making progress');
+    }
+    expect(game.length).toBe(game.capacity);
+  }
 });

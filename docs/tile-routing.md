@@ -4,7 +4,7 @@ The previous planner could take shortcuts on an indexed cycle. On a half-full 25
 
 The planner tries a short chase and checks whether the resulting body still fits a spanning cycle. When it needs a new route, it connects the food to the body tree, pricing the walk from the head to the attachment and then from the landing corner to the food. It attaches other components outside that arc when possible. If it relies on the tail moving, it checks the arrival time on each released cell. Longer routes are reconsidered after the tail advances. On a wrapped board, an older body can first follow a translated cycle after checking the release time of every occupied cell and any intervening food spawns.
 
-The tile planner runs on even-sided boards with both sides at least four and between 4,096 and 65,536 cells. Other shapes and larger boards use the previous planner. The spanning-tree family and bounded search do not exhaust all legal snake paths.
+The tile planner covers walled rectangles with sides of at least two and 4,096 to 65,536 cells, plus smaller odd-by-odd walled boards with both sides at least three. Wrapped boards use the tile planner for even sides of at least four and 4,096 to 65,536 cells. The spanning-tree family and bounded search do not exhaust all legal snake paths.
 
 ## Matched runs
 
@@ -209,7 +209,7 @@ The two staged batches ran sequentially without a concurrent build or browser te
 
 ## Direct routes and future food access
 
-Autoplay compares additional certified paths on boards with two even dimensions of at least four and 4,096 to 65,536 cells. Smaller boards retain their existing multi-food and endgame planners. The planner tries both one-turn Manhattan paths and alternative arrival directions. A wrapped board supports four alignments of the tile lattice. When two direct paths admit a full-board cycle, a breadth-first search on each projected body measures the extra distance from the bite to other free cells. Every reachable cell contributes its obstacle distance divided by its geometric distance, minus one. A disconnected free cell incurs a penalty of width plus height. This static-body estimate ranks paths. Separate tail-release checks and spanning-cycle completion certify them. The planner can also replay several seeded food spawns before certifying the resulting body. Its longer search and access estimates trade calculation time for additional route choices.
+The original benchmark compared additional certified paths on boards with two even dimensions of at least four and 4,096 to 65,536 cells. Smaller boards retain their existing multi-food and endgame planners. The planner tries both one-turn Manhattan paths and alternative arrival directions. A wrapped board supports four alignments of the tile lattice. When two direct paths admit a full-board cycle, a breadth-first search on each projected body measures the extra distance from the bite to other free cells. Every reachable cell contributes its obstacle distance divided by its geometric distance, minus one. A disconnected free cell incurs a penalty of width plus height. This static-body estimate ranks paths. Separate tail-release checks and spanning-cycle completion certify them. The planner can also replay several seeded food spawns before certifying the resulting body. Its longer search and access estimates trade calculation time for additional route choices.
 
 Each row below compares the historical standard / growth modes on six seeds (42, 91, 999, 7, 113, 2026), 16 foods per seed on a 256 × 256 board. Weighted stretch is total moves divided by the sum of the geometric distances at spawn. Worst stretch is the largest individual meal ratio. Both account for wraparound. Peak is the longest observed planner call in milliseconds on a shared Mac.
 
@@ -280,3 +280,21 @@ Paired 256 × 256 runs used 13 seeds per topology. Fresh boards ran for 100 meal
 | Wrap | 98% | 49,076 | 49,076 | 28.39 | 73.46 |
 
 On 96 × 64 boards grown naturally to half full (seeds 13, 71 and 317), walled runs used 2,513,148 moves versus 2,536,847 previously. Wrapped runs used 1,671,602 versus 1,709,454. Total CPU time rose from 10.98 to 12.95 seconds with walls and from 7.82 to 8.55 seconds with wrapping. Long detours remain possible. Both 64 × 64 seed-211 games reached full occupancy.
+
+## Walled boards with odd sides
+
+A grid move switches checkerboard color. An odd-by-odd rectangle has unequal color counts, so a cycle visiting every cell exactly once cannot exist. The old controller fell back to chasing food and checking tail reachability. When no food route passed, it tested escape moves again at each step. This could consume most of the simulation budget, trap the snake, or repeat the same body configuration without ever reaching the food.
+
+The new planner extends boundary tiles into 2x3 or 3x2 perimeter loops. With two odd sides the southeast tile covers eight of its nine cells. Two diagonal cells share the same two perimeter neighbors, so either can occupy the same position in that loop. The planner can switch the omitted cell at a bite, after checking the old cell has cleared the retained body, or on the winning move. The full route still uses actual grid coordinates, including the additional boundary cells. A restored position outside this family can use recovery. Once recovery has spent twice the board area without a bite, it can detect a repeated body and heading and stop autoplay.
+
+Complete runs below started fresh with seeds 42, 91 and 999. Each triple lists actual moves to victory in that order. The old 37x37 runs each went 4,107 consecutive moves without food and were stopped. Runs from screenshots cannot be replayed exactly without their starting seeds.
+
+| Walled size | New moves to victory |
+|---|---|
+| 37x37 | 127,697 / 117,661 / 131,151 |
+| 37x47 | 164,057 / 162,335 / 163,733 |
+| 67x47 | 500,503 / 513,837 / 495,545 |
+| 78x79 | 1,865,807 / 1,691,244 / 1,575,263 |
+| 79x79 | 1,844,813 / 1,768,017 / 1,734,497 |
+
+The old 78x79 runs took 4,751,397 / 4,821,182 / 4,814,530 moves. Total meals longer than 1,024 moves fell from 4,179 to 1,366. On 79x79 seed 42, the first 10% fill took 56,208 moves previously and 68,250 after the change. In that phase the old controller reported tail recovery on 55,923 moves and the new controller on zero. The slowest observed planning call fell from 35.19 to 3.25 ms in this Node run. Timing depends on host load. One meal later in the same revised game still took 6,192 moves.

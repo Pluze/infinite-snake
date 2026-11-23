@@ -1,7 +1,7 @@
 import { Direction, Game, key, Point } from './Game';
 import { shortestFinish } from './Endgame';
 import { bridgeLength } from './CycleBridge';
-import { tileRoute } from './TileRoute';
+import { supportsTileRoute, tileRoute } from './TileRoute';
 import { chooseCycleRollout } from './CycleRollout';
 import { Cycle, TorusCycle } from './TorusCycle';
 import { GridCycle } from './GridCycle';
@@ -44,8 +44,10 @@ export class AutoPlayer {
   private checkedLegacyCycle = false;
   private retryChaseAt = 0;
   private phaseReason = '';
+  private recoveryAnchor?: { head: Point; heading: Direction; body: number[]; remaining: number; window: number };
   private coverageRoute = false;
   clear() {
+    this.recoveryAnchor = undefined;
     this.previewRoute = undefined;
     this.previewFood = undefined;
     this.afterWait = undefined;
@@ -251,8 +253,8 @@ export class AutoPlayer {
     this.cycleAfter = undefined;
     this.rejoin = undefined;
     this.retryRejoinAt = this.retryTileAt = Infinity;
-    const tiled = game.capacity >= ADAPTIVE_BOARD_CELLS && game.capacity <= 65_536
-      && game.width >= 4 && game.height >= 4 && game.width % 2 === 0 && game.height % 2 === 0;
+    const tiled = (game.capacity >= ADAPTIVE_BOARD_CELLS || !this.cycle) && game.capacity <= 65_536
+      && supportsTileRoute(game);
     if (tiled && this.retryChaseAt === 0) {
       const route = tileRoute(game);
       if (route) {
@@ -911,6 +913,23 @@ export class AutoPlayer {
   }
 
   private planRecovery(game: Game): Move {
+    // Legacy saves may already be outside the certified family. Catch a
+    // repeated full body state in recovery with one exponentially spaced
+    // checkpoint. An equal head position alone does not establish a loop.
+    const lastMeal = game.scores.changes[game.scores.changes.length - 1][0];
+    if (!this.cycle && game.steps - lastMeal > 2 * game.capacity) {
+      const anchor = this.recoveryAnchor;
+      if (anchor && anchor.heading === game.direction && anchor.head.x === game.head.x && anchor.head.y === game.head.y
+        && anchor.body.length === game.length && anchor.body.every((cell, i) => {
+          const p = game.segment(game.first + i)!;
+          return cell === p.y * game.width + p.x;
+        })) return { safe: false, reason: 'Repeated recovery loop without reaching food' };
+      if (!anchor || --anchor.remaining <= 0) {
+        const window = anchor ? anchor.window * 2 : game.length;
+        this.recoveryAnchor = { head: game.head, heading: game.direction, window, remaining: window,
+          body: Array.from(game.segments.values(), p => p.y * game.width + p.x) };
+      }
+    } else this.recoveryAnchor = undefined;
     const route = this.findFoodRoute(game, false);
     if (route) return this.cacheRoute(game, route, 'Keeping a route to the tail');
     const directions = [game.direction, (game.direction + 1) % 4, (game.direction + 3) % 4] as Direction[];
