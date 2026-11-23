@@ -20,30 +20,28 @@ export function mealMedian(history: ScoreHistory, index: number) {
   return series[index];
 }
 
-export function sampleHistory(history: ScoreHistory, windowSize: number, growth: boolean, initialLength: number, buckets = 120) {
+export function sampleHistory(history: ScoreHistory, start: number, growth: boolean, initialLength: number, buckets = 120) {
   const end = history.length;
-  const start = windowSize ? Math.max(0, end - windowSize - 1) : 0;
-  const width = Math.max(1, Math.ceil((end - start) / buckets));
   if (growth) {
+    const width = Math.max(1, Math.ceil((end - start) / buckets));
     const selected = new Set<number>();
     for (let from = start; from < end; from += width) {
       selected.add(from);
       selected.add(Math.min(end, from + width) - 1);
     }
-    return [...selected].map(step => ({ step, score: initialLength + history.at(step) / 10 }));
+    return [...selected].map(step => ({ x: step, score: initialLength + history.at(step) / 10 }));
   }
 
-  // Bucket by elapsed steps, but preserve actual bite times and the longest
-  // and shortest meals, including intervals beginning outside the window.
+  // Sample the same log food-count axis that is used to draw the chart.
   const changes = history.changes;
-  const first = Math.max(1, history.changeIndex(start - 1) + 1);
+  const first = Math.max(1, start);
   if (first >= changes.length) return [];
   const selected = new Set([first, changes.length - 1]);
-  const logStart = Math.log(Math.max(1, start));
-  const logWidth = (Math.log(Math.max(2, end)) - logStart) / buckets;
+  const logStart = Math.log(first);
+  const logWidth = Math.log(Math.max(first + 1, changes.length - 1) / first) / buckets;
   let bucket = -1, low = first, high = first, lowMedian = first, highMedian = first;
   for (let i = first; i < changes.length; i++) {
-    const current = Math.floor((Math.log(changes[i][0]) - logStart) / logWidth);
+    const current = Math.floor((Math.log(i) - logStart) / logWidth);
     if (current !== bucket) {
       selected.add(low); selected.add(high); selected.add(lowMedian); selected.add(highMedian);
       low = high = lowMedian = highMedian = i; bucket = current;
@@ -56,5 +54,5 @@ export function sampleHistory(history: ScoreHistory, windowSize: number, growth:
     if (median > mealMedian(history, highMedian)) highMedian = i;
   }
   selected.add(low); selected.add(high); selected.add(lowMedian); selected.add(highMedian);
-  return [...selected].sort((a, b) => a - b).map(i => ({ step: changes[i][0], score: mealSteps(history, i) }));
+  return [...selected].sort((a, b) => a - b).map(i => ({ x: i, score: mealSteps(history, i) }));
 }

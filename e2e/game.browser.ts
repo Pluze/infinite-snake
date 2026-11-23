@@ -485,7 +485,7 @@ test('a full wrapped board shows a single fitted snake and keeps manual zoom', a
   expect(result.copy).toEqual([16, 25, 21]);
 });
 
-test('meal chart spaces decades evenly and inspects the matching median', async ({ page }) => {
+test('meal chart positions bites by log food count and inspects the matching median', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#loading')).toBeHidden();
   await page.waitForFunction(() => performance.now() > 500);
@@ -499,9 +499,35 @@ test('meal chart spaces decades evenly and inspects the matching median', async 
     new Charts().render(game);
     const svg = document.querySelector<SVGSVGElement>('#efficiency-chart svg')!;
     const rect = svg.getBoundingClientRect();
-    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: rect.left + rect.width * 191.33 / 330 }));
+    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: rect.left + rect.width * 182.90 / 330 }));
     return svg.querySelector('[data-series="meal-median"]')!.getAttribute('d');
   });
-  expect(path).toMatch(/^M112\.67,[\d.]+ L191\.33,[\d.]+ L270\.00,/);
-  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Step 100 · 90 steps to food · 1.07× (width + height) · Median 50 steps · 0.595× (width + height)');
+  expect(path).toMatch(/^M34\.00,[\d.]+ L182\.90,[\d.]+ L270\.00,/);
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Food #2 · Step 100 · 90 steps to food · 1.07× (width + height) · Median 50 steps · 0.595× (width + height)');
+});
+
+test('latest percentages use steps for growth and completed bites for meal cost', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  const windows = await page.evaluate(async () => {
+    const gameModule = '/src/Game.ts', chartModule = '/src/Charts.ts';
+    const { Game } = await import(gameModule), { Charts } = await import(chartModule);
+    const game = new Game(42);
+    game.steps = 1000;
+    game.scores.length = 1001;
+    for (let i = 1; i <= 100; i++) game.scores.changes.push([i * 8, i * 10]);
+    const ids = ['growth-chart', 'efficiency-chart'];
+    const charts = new Charts();
+    const results = [];
+    for (const range of [3, 10, 30, 50, 0]) {
+      for (const id of ids) document.querySelector<HTMLButtonElement>(`#${id} [data-range="${range}"]`)!.click();
+      await new Promise(resolve => setTimeout(resolve, 510));
+      charts.render(game);
+      results.push(ids.map(id => Array.from(document.querySelectorAll(`#${id} svg text[y="119"]`), tick => tick.textContent)).map(ticks => [ticks[0], ticks.at(-1)]));
+    }
+    return results;
+  });
+  for (const [index, percent] of [3, 10, 30, 50, 100].entries()) {
+    expect(windows[index]).toEqual([[String(1000 - percent * 10), '1,000'], [String(101 - percent), '100']]);
+  }
 });
