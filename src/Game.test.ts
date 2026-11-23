@@ -154,6 +154,36 @@ describe('torus autoplay', () => {
   },30000);
 });
 describe('torus persistence',()=>{
+  it('restores a board with missing score history and repairs it on save', async () => {
+    const persistence = new Persistence();
+    await persistence.open();
+    await persistence.clear();
+    const game = new Game(42);
+    const food = game.next(game.head, game.direction);
+    game.food = new Map([[key(food), food]]);
+    expect(game.step(game.direction)).toBe(true);
+    expect(game.score).toBeGreaterThan(0);
+    await persistence.save(game);
+
+    const request = indexedDB.open('infinite-snake-torus-v2', 1);
+    const db = await new Promise<IDBDatabase>(resolve => { request.onsuccess = () => resolve(request.result); });
+    const transaction = db.transaction('history', 'readwrite');
+    transaction.objectStore('history').delete(0);
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
+    db.close();
+
+    const restored = (await persistence.load(() => {}))!;
+    expect(restored.snapshot()).toEqual(game.snapshot());
+    expect(restored.scores.at(game.steps)).toBe(game.score);
+    await persistence.save(restored);
+    expect((await persistence.load(() => {}))!.scores).toEqual(restored.scores);
+    await persistence.clear();
+    persistence.close();
+  });
+
   it('atomically restores food, RNG, travel and history, then continues identically',async()=>{
     const p=new Persistence();await p.open();await p.clear();const g=new Game(42),bot=new AutoPlayer();
     for(let i=0;i<1100;i++){const plan=bot.preview(g);if(!plan.safe)break;g.step(plan.directions[0]);bot.advance(g);if(i===500)await p.save(g);}
