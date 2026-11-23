@@ -1,5 +1,5 @@
 import { Game } from './Game';
-import { mealMean, mealSteps, sampleHistory } from './HistorySampler';
+import { mealMedian, mealSteps, sampleHistory } from './HistorySampler';
 import { formatCount } from './formatCount';
 function fillRatio(length: number, capacity: number) {
   const ratio = length / capacity;
@@ -12,6 +12,7 @@ export class Charts {
   private limits = [0, 0];
   private lastSteps = -1;
   private dirty = true;
+  private hoverX: (number | undefined)[] = [];
   private lastDraw = 0;
   constructor() {
     document.querySelectorAll<HTMLButtonElement>('.ranges button').forEach(button => button.addEventListener('click', () => {
@@ -23,6 +24,7 @@ export class Charts {
   reset() {
     this.dirty = true;
     this.lastSteps = -1;
+    this.hoverX = [];
     for (const id of ['growth-chart', 'efficiency-chart']) {
       const svg = document.getElementById(id)?.querySelector('svg');
       if (svg) { svg.onpointermove = null; svg.replaceChildren(); }
@@ -43,37 +45,65 @@ export class Charts {
         panel.querySelector('.chart-tooltip')!.textContent = 'No food eaten in this step range.';
         return;
       }
-      if (i) panel.querySelector('.chart-tooltip')!.textContent = 'X: total steps · Right: steps / (width + height)';
-      const minX = this.limits[i] ? Math.max(0, game.steps - this.limits[i]) : 0, maxX = Math.max(minX + 1, game.steps);
-      const means = i ? points.map(p => mealMean(game.scores, game.scores.changeIndex(p.step))) : [];
-      const peak = Math.max(i === 0 ? 10 : 1, ...points.map(p => p.score), ...means) * 1.12;
+      if (i) panel.querySelector('.chart-tooltip')!.textContent = 'Log scales · X: total steps · Right: steps / (width + height)';
+      const minX = Math.max(i ? 1 : 0, this.limits[i] ? game.steps - this.limits[i] : 0);
+      const maxX = Math.max(minX + 1, game.steps);
+      const medians = i ? points.map(p => mealMedian(game.scores, game.scores.changeIndex(p.step))) : [];
+      const peak = Math.max(i === 0 ? 10 : 1, ...points.map(p => p.score), ...medians) * 1.12;
       const maxY = i === 0 ? Math.min(game.capacity, Math.ceil(peak / 2) * 2) : Math.max(2, Math.ceil(peak / 2) * 2);
       const right = 270;
       const span = game.width + game.height;
       const multiple = (steps: number) => Number((steps / span).toPrecision(3)) + "×";
-      const x = (n: number) => 34 + (n - minX) / (maxX - minX) * (right - 34);
-      const y = (n: number) => 101 - n / maxY * 88;
+      const logSpan = i ? Math.log(maxX / minX) : 0;
+      const x = (step: number) => 34 + (right - 34) * (i ? Math.log(step / minX) / logSpan : (step - minX) / (maxX - minX));
+      const y = (value: number) => 101 - 88 * (i ? Math.log(value) / Math.log(maxY) : value / maxY);
+      const yTicks = i ? [1] : [...new Set([0, Math.floor(maxY / 2), maxY])];
+      if (i) {
+        const stride = Math.max(1, Math.ceil(Math.log10(maxY) / 4));
+        for (let value = 10 ** stride; value <= maxY; value *= 10 ** stride) yTicks.push(value);
+        if (yTicks.length === 1) yTicks.push(maxY);
+      }
+      const xTicks = [minX];
+      if (i) {
+        for (let t = 10 ** Math.ceil(Math.log10(minX)); t < maxX; t *= 10) {
+          if (x(t) - x(xTicks[xTicks.length - 1]) > 43 && right - x(t) > 43) xTicks.push(t);
+        }
+      }
+      if (game.steps > minX) xTicks.push(game.steps);
       const path = points.map((p, j) => `${j ? 'L' : 'M'}${x(p.step).toFixed(2)},${y(p.score).toFixed(2)}`).join(' ');
-      const smooth = i ? points.map((p, j) => `${j ? 'L' : 'M'}${x(p.step).toFixed(2)},${y(means[j]).toFixed(2)}`).join(' ') : '';
+      const smooth = i ? points.map((p, j) => `${j ? 'L' : 'M'}${x(p.step).toFixed(2)},${y(medians[j]).toFixed(2)}`).join(' ') : '';
       const color = i === 0 ? '#b5e59b' : '#e9b47b';
       svg.innerHTML = `<defs><linearGradient id="fill-${i}" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${color}" stop-opacity=".15"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>` +
-        (i === 0 ? [...new Set([0, Math.floor(maxY / 2) / maxY, 1])] : [0, .5, 1]).map(f => `<path d="M34 ${y(f * maxY)} H${right}" stroke="#2c4031" stroke-dasharray="2 4"/><text x="28" y="${y(f * maxY) + 3}" text-anchor="end">${i ? (f * maxY).toFixed(0) : formatCount(Math.round(f * maxY))}</text><text x="324" y="${y(f * maxY) + 3}" text-anchor="end">${i ? multiple(f * maxY) : fillRatio(f * maxY, game.capacity)}</text>`).join('') +
-        `<path d="${path} L${x(points[points.length-1].step)},101 L${x(points[0].step)},101 Z" fill="url(#fill-${i})"/><path d="${path}" fill="none" stroke="${color}" stroke-width="${i ? 1.2 : 1.7}" stroke-opacity="${i ? .7 : 1}" stroke-linejoin="round"/>${i ? `<path data-series="meal-mean" d="${smooth}" fill="none" stroke="#96daca" stroke-width="2" stroke-linejoin="round"/>` : ''}<circle cx="${x(points[points.length-1].step)}" cy="${y(points[points.length-1].score)}" r="2.5" fill="${color}"/><text x="34" y="119">${formatCount(minX)}</text><text x="${right}" y="119" text-anchor="end">${formatCount(game.steps)}</text>`;
-      svg.onpointermove = e => {
-        const rect = svg.getBoundingClientRect(), step = Math.round(minX + Math.max(0, Math.min(1, ((e.clientX - rect.left) / rect.width * 330 - 34) / (right - 34))) * (maxX - minX));
-        const actual = Math.min(game.steps, step), score = game.scores.at(actual);
+        yTicks.map(value => `<path d="M34 ${y(value)} H${right}" stroke="#2c4031" stroke-dasharray="2 4"/><text x="28" y="${y(value) + 3}" text-anchor="end">${formatCount(value)}</text><text x="324" y="${y(value) + 3}" text-anchor="end">${i ? multiple(value) : fillRatio(value, game.capacity)}</text>`).join('') +
+        `<path d="${path} L${x(points[points.length-1].step)},101 L${x(points[0].step)},101 Z" fill="url(#fill-${i})"/><path d="${path}" fill="none" stroke="${color}" stroke-width="${i ? 1.2 : 1.7}" stroke-opacity="${i ? .7 : 1}" stroke-linejoin="round"/>${i ? `<path data-series="meal-median" d="${smooth}" fill="none" stroke="#96daca" stroke-width="2" stroke-linejoin="round"/>` : ''}<circle cx="${x(points[points.length-1].step)}" cy="${y(points[points.length-1].score)}" r="2.5" fill="${color}"/>` +
+        xTicks.map((tick, j) => `<text x="${x(tick)}" y="119" text-anchor="${j === 0 ? 'start' : j === xTicks.length - 1 ? 'end' : 'middle'}">${formatCount(tick)}</text>`).join('');
+      const showHover = (clientX: number) => {
+        const transform = svg.getScreenCTM();
+        if (!transform) return;
+        const svgX = (clientX - transform.e) / transform.a;
+        const offset = Math.max(0, Math.min(1, (svgX - 34) / (right - 34)));
+        const step = i ? minX * Math.exp(offset * logSpan) : minX + offset * (maxX - minX);
+        const actual = Math.min(game.steps, Math.round(step)), score = game.scores.at(actual);
         const tooltip = panel.querySelector('.chart-tooltip')!;
         if (i) {
           const history = game.scores;
-          const left = Math.max(history.changeIndex(points[0].step), history.changeIndex(actual));
+          const left = Math.max(history.changeIndex(points[0].step), history.changeIndex(Math.floor(step)));
           const right = Math.min(left + 1, history.changes.length - 1);
-          const bite = actual - history.changes[left][0] <= history.changes[right][0] - actual ? left : right;
+          const bite = Math.abs(Math.log(step / history.changes[left][0])) <= Math.abs(Math.log(step / history.changes[right][0])) ? left : right;
           const interval = mealSteps(history, bite);
-          tooltip.textContent = `Step ${formatCount(history.changes[bite][0])} · ${formatCount(interval)} ${interval === 1 ? 'step' : 'steps'} to food · ${multiple(interval)} (width + height) · Mean ${Number(mealMean(history, bite).toFixed(1))} steps`;
+          const median = mealMedian(history, bite);
+          tooltip.textContent = `Step ${formatCount(history.changes[bite][0])} · ${formatCount(interval)} ${interval === 1 ? 'step' : 'steps'} to food · ${multiple(interval)} (width + height) · Median ${median} ${median === 1 ? 'step' : 'steps'} · ${multiple(median)} (width + height)`;
         } else {
           tooltip.textContent = `Step ${formatCount(actual)} · Length ${formatCount(score / 10 + initialLength)} · Board fill ${fillRatio(score / 10 + initialLength, game.capacity)} · Score ${formatCount(score)}`;
         }
       };
+      svg.onpointermove = event => {
+        this.hoverX[i] = event.clientX;
+        showHover(event.clientX);
+      };
+      svg.onpointerleave = () => { this.hoverX[i] = undefined; };
+      const pointer = this.hoverX[i];
+      if (pointer !== undefined) showHover(pointer);
     });
   }
 }

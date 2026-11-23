@@ -246,6 +246,37 @@ function shortenArc(game: Game, route: Route): Route | undefined {
   return { directions, points };
 }
 
+// Try the largest single-edge bypasses when the combination of all bypasses
+// could change the body too much to retain its spanning-cycle certificate.
+function spliceArc(game: Game, route: Route, certify: (board: Game, route: Route) => boolean): Route | undefined {
+  const ranks = new Map<number, number>();
+  const chords: { start: number; end: number; direction: Direction; gain: number }[] = [];
+  for (let i = route.points.length; i >= 0; i--) {
+    const p = i ? route.points[i - 1] : game.head;
+    for (let d = 0; d < 4; d++) {
+      const direction = d as Direction;
+      const next = game.next(p, direction);
+      if (!game.contains(next)) continue;
+      const j = ranks.get(next.y * game.width + next.x);
+      if (j === undefined || j - i <= 2 || (!i && !game.canMove(direction))) continue;
+      const gain = j - i - 1;
+      if (chords.length === 8 && gain <= chords[7].gain) continue;
+      chords.push({ start: i, end: j, direction, gain });
+      chords.sort((a, b) => b.gain - a.gain);
+      if (chords.length > 8) chords.pop();
+    }
+    ranks.set(p.y * game.width + p.x, i);
+  }
+  for (const { start, end, direction } of chords) {
+    const suffix = route.points.slice(end - 1);
+    if (!suffix.every((p, i) => (game.segmentAt(p) ?? -1) <= game.first + start + i)) continue;
+    const candidate = { points: route.points.slice(0, start).concat(suffix),
+      directions: route.directions.slice(0, start).concat(direction, route.directions.slice(end)) };
+    // A sufficiently long unchanged suffix restores the exact body at the bite.
+    if (suffix.length > game.length || certify(game, candidate)) return candidate;
+  }
+}
+
 export function tileRoute(game: Game, before = Infinity): Route | undefined {
   if (!supportsTileRoute(game)) return;
   const target = game.food.values().next().value;
@@ -337,7 +368,9 @@ export function tileRoute(game: Game, before = Infinity): Route | undefined {
     }
     if (safe) best = alternative;
   }
-  if (!roomForChase || !best || best.points.length <= 2 * distance) return best;
+  if (!best || best.points.length <= 2 * distance) return best;
+  const bypass = () => Number.isFinite(before) ? undefined : spliceArc(game, best!, certified);
+  if (!roomForChase) return bypass() ?? best;
   if (distance <= budget && distance > 2) {
     const retained = Math.min(game.length - 1, distance - 1);
     const empty: Route = { directions: [], points: [] };
@@ -350,7 +383,7 @@ export function tileRoute(game: Game, before = Infinity): Route | undefined {
   }
   const short = shortenArc(game, best);
   if (short && certified(game, short)) return short;
-  return best;
+  return bypass() ?? best;
 }
 
 /** Join neighboring 2x2 perimeter loops along a spanning tree. Each join

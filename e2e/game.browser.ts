@@ -350,9 +350,9 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await expect(page.locator('#growth-chart svg text[x="324"]').last()).toHaveText('1');
   await expect(page.locator('#growth-chart svg circle')).toHaveAttribute('cx', '270');
   await expect(page.locator('#efficiency-summary')).toHaveText('1 step');
-  await expect(page.locator('#efficiency-chart [data-series="meal-mean"]')).toHaveCount(1);
+  await expect(page.locator('#efficiency-chart [data-series="meal-median"]')).toHaveCount(1);
   await page.locator('#efficiency-chart svg circle').hover();
-  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Step 1 · 1 step to food · 0.333× (width + height) · Mean 1');
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Step 1 · 1 step to food · 0.333× (width + height) · Median 1 step · 0.333× (width + height)');
   await page.locator('#growth-chart svg circle').hover();
   await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
@@ -483,4 +483,25 @@ test('a full wrapped board shows a single fitted snake and keeps manual zoom', a
   expect(result.scale).toBe(4);
   expect(result.body).toEqual([105, 202, 144]);
   expect(result.copy).toEqual([16, 25, 21]);
+});
+
+test('meal chart spaces decades evenly and inspects the matching median', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await page.waitForFunction(() => performance.now() > 500);
+  const path = await page.evaluate(async () => {
+    const gameModule = '/src/Game.ts', chartModule = '/src/Charts.ts';
+    const { Game } = await import(gameModule), { Charts } = await import(chartModule);
+    const game = new Game(42, 37, 47, false);
+    game.steps = 1000;
+    game.scores.length = 1001;
+    game.scores.changes.push([10, 10], [100, 20], [1000, 30]);
+    new Charts().render(game);
+    const svg = document.querySelector<SVGSVGElement>('#efficiency-chart svg')!;
+    const rect = svg.getBoundingClientRect();
+    svg.dispatchEvent(new PointerEvent('pointermove', { clientX: rect.left + rect.width * 191.33 / 330 }));
+    return svg.querySelector('[data-series="meal-median"]')!.getAttribute('d');
+  });
+  expect(path).toMatch(/^M112\.67,[\d.]+ L191\.33,[\d.]+ L270\.00,/);
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Step 100 · 90 steps to food · 1.07× (width + height) · Median 50 steps · 0.595× (width + height)');
 });
