@@ -20,7 +20,6 @@ type FoodRoute = { directions: Direction[]; points: Point[]; coverage: boolean; 
 
 /** Short chases and compact coverage with a cycle as a safety certificate. */
 export class AutoPlayer {
-  prioritizeGrowth = false;
   private route: Direction[] = [];
   private points: Point[] = [];
   private cursor = 0;
@@ -185,9 +184,9 @@ export class AutoPlayer {
       if (game.steps < this.bridgeEnd) {
         const remaining = this.bridgeEnd - game.steps;
         const interval = Math.max(game.width, game.height, Math.ceil(game.length / 16));
-        if (this.prioritizeGrowth && remaining % interval === 0) {
+        if (remaining % interval === 0) {
           const food = game.food.values().next().value!;
-          const route = tileRoute(game, true);
+          const route = tileRoute(game);
           if (route && route.directions.length < Math.min(remaining, this.cycle!.distance(game.head, food))) {
             this.bridgeEnd = 0;
             game.autoBridge = undefined;
@@ -197,7 +196,7 @@ export class AutoPlayer {
             return this.cacheTileRoute(game, route);
           }
         }
-        this.replanCycleAt = this.prioritizeGrowth ? game.steps + (remaining % interval || interval) : this.bridgeEnd;
+        this.replanCycleAt = game.steps + (remaining % interval || interval);
         return this.followCycle(game, remaining, 'Moving to a shorter food cycle');
       }
       this.bridgeEnd = 0;
@@ -207,7 +206,7 @@ export class AutoPlayer {
     }
     if (game.steps >= this.retryTileAt) {
       const remaining = this.route.length - this.cursor;
-      const better = tileRoute(game, this.prioritizeGrowth);
+      const better = tileRoute(game);
       if (better && better.directions.length < remaining) {
         this.cursor = 0;
         return this.cacheTileRoute(game, better);
@@ -251,10 +250,10 @@ export class AutoPlayer {
     this.cycleAfter = undefined;
     this.rejoin = undefined;
     this.retryRejoinAt = this.retryTileAt = Infinity;
-    const tiled = (this.prioritizeGrowth || game.capacity >= ADAPTIVE_BOARD_CELLS) && game.capacity <= 65_536
+    const tiled = game.capacity >= ADAPTIVE_BOARD_CELLS && game.capacity <= 65_536
       && game.width >= 4 && game.height >= 4 && game.width % 2 === 0 && game.height % 2 === 0;
     if (tiled && this.retryChaseAt === 0) {
-      const route = tileRoute(game, this.prioritizeGrowth);
+      const route = tileRoute(game);
       if (route) {
         this.ordered = undefined;
         return this.cacheTileRoute(game, route);

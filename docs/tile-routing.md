@@ -209,9 +209,9 @@ The two staged batches ran sequentially without a concurrent build or browser te
 
 ## Direct routes and future food access
 
-Enable **Prioritize growth** to compare additional certified paths on even boards with both dimensions at least four and up to 65,536 cells. The planner tries both one-turn Manhattan paths and alternative arrival directions. A wrapped board supports four alignments of the tile lattice. When two direct paths admit a full-board cycle, a breadth-first search on each projected body measures the extra distance from the bite to other free cells. Every reachable cell contributes its obstacle distance divided by its geometric distance, minus one. A disconnected free cell incurs a penalty of width plus height. This static-body estimate ranks paths. Separate tail-release checks and spanning-cycle completion certify them. The planner can also replay several seeded food spawns before certifying the resulting body. Its longer search and access estimates trade calculation time for additional route choices.
+Autoplay compares additional certified paths on boards with two even dimensions of at least four and 4,096 to 65,536 cells. Smaller boards retain their existing multi-food and endgame planners. The planner tries both one-turn Manhattan paths and alternative arrival directions. A wrapped board supports four alignments of the tile lattice. When two direct paths admit a full-board cycle, a breadth-first search on each projected body measures the extra distance from the bite to other free cells. Every reachable cell contributes its obstacle distance divided by its geometric distance, minus one. A disconnected free cell incurs a penalty of width plus height. This static-body estimate ranks paths. Separate tail-release checks and spanning-cycle completion certify them. The planner can also replay several seeded food spawns before certifying the resulting body. Its longer search and access estimates trade calculation time for additional route choices.
 
-Each row below compares standard / growth mode on six seeds (42, 91, 999, 7, 113, 2026), 16 foods per seed on a 256 × 256 board. Weighted stretch is total moves divided by the sum of the geometric distances at spawn. Worst stretch is the largest individual meal ratio. Both account for wraparound. Peak is the longest observed planner call in milliseconds on a shared Mac.
+Each row below compares the historical standard / growth modes on six seeds (42, 91, 999, 7, 113, 2026), 16 foods per seed on a 256 × 256 board. Weighted stretch is total moves divided by the sum of the geometric distances at spawn. Worst stretch is the largest individual meal ratio. Both account for wraparound. Peak is the longest observed planner call in milliseconds on a shared Mac.
 
 | Edges | Initial fill | Steps | Turns | Weighted stretch | Worst stretch | Peak ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -233,4 +233,19 @@ Fresh games used seeds 42, 91 and 999. Each 32 × 24 game ran to a win. Each 256
 | 256 × 256 | Walls | 1,310,208 / 1,314,036 | 30,784 / 29,910 |
 | 256 × 256 | Wrap | 773,937 / 734,501 | 20,546 / 16,997 |
 
-Run the existing staged benchmark twice, setting `SNAKE_BENCH_GROWTH=1` for the second run. Growth mode is opt-in because some walled games take more moves and some individual meals still require a long cycle transition.
+These tables compare the two historical policies in revision 59ca2b8. The current planner integrates certified direct routes, alternative arrival headings and bounded multi-meal search automatically. Its multi-meal search budget scales with body length and the distance to food. The benchmark runs the same planner as the game.
+
+The integrated planner was run on the same six seeds. Openings collected 100 foods per seed and staged bodies collected 16. Long meals took more than 1,024 moves. Peak times are observed Node wall-clock timings with other tests running.
+
+| Edges | Initial fill | Steps | Weighted stretch | Worst stretch | Long meals | Peak ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Walls | 0% | 104,418 | 1.000 | 1.05 | 0 | 4.10 |
+| Walls | 8% | 80,555 | 4.769 | 98.20 | 13 | 10.63 |
+| Walls | 50% | 108,748 | 8.590 | 106.25 | 14 | 17.30 |
+| Walls | 90% | 45,270 | 4.390 | 68.89 | 16 | 5.78 |
+| Walls | 98% | 19,082 | 2.111 | 68.33 | 0 | 6.50 |
+| Wrap | 0% | 77,426 | 1.001 | 1.57 | 0 | 8.52 |
+| Wrap | 8% | 64,737 | 5.093 | 58.82 | 13 | 9.12 |
+| Wrap | 50% | 246,904 | 24.140 | 298.33 | 16 | 43.13 |
+| Wrap | 90% | 45,758 | 6.064 | 59.44 | 7 | 29.99 |
+| Wrap | 98% | 25,264 | 3.876 | 162.60 | 4 | 19.66 |

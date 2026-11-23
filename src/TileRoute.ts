@@ -145,15 +145,16 @@ function futureDetour(game: Game, route: Route) {
 }
 const accessBuffers = new WeakMap<Game, { distance: Int32Array; queue: Int32Array }>();
 
-export function tileRoute(game: Game, prioritizeGrowth = false): Route | undefined {
+export function tileRoute(game: Game): Route | undefined {
   if (game.width % 2 || game.height % 2 || Math.min(game.width, game.height) < 4) return;
   const target = game.food.values().next().value;
   if (!target) return;
-  const phases = prioritizeGrowth && game.wraparound ? [0, 1, 2, 3] : [0];
+  const phases = game.wraparound ? [0, 1, 2, 3] : [0];
   const certified = (board: Game, chase: Route) =>
     phases.some(phase => completeTileCycle(board, chase, 0, phase));
-  const budget = Math.min(2048, boardDistance(game, game.head, target) * 2 + 64);
-  if (prioritizeGrowth && boardDistance(game, game.head, target) <= budget) {
+  const distance = boardDistance(game, game.head, target);
+  const budget = Math.min(2048, distance * 2 + 64);
+  if (distance <= budget) {
     const elbows = Array.from(elbowRoutes(game, target)).filter(route => certified(game, route));
     if (elbows.length === 1) return elbows[0];
     if (elbows.length === 2) return futureDetour(game, elbows[1]) < futureDetour(game, elbows[0]) ? elbows[1] : elbows[0];
@@ -166,17 +167,24 @@ export function tileRoute(game: Game, prioritizeGrowth = false): Route | undefin
     const moves = path.slice(1);
     const chase = { directions: moves.map(n => n.d), points: moves.map(n => n.p) };
     if (certified(game, chase)) return chase;
+    // Alternate arrival headings can preserve the spanning cycle even when
+    // the first shortest path cuts across its required joins.
+    for (const nodes of candidates) {
+      const moves = nodes.slice(1);
+      const chase = { directions: moves.map(n => n.d), points: moves.map(n => n.p) };
+      if (certified(game, chase)) return chase;
+    }
     // A turn that cannot extend to a spanning cycle after this bite may be
     // harmless once the tail clears it. Execute a short sequence on a fork
     // and pin the exact resulting body, including every intervening growth.
-    if (game.length < game.capacity * (prioritizeGrowth ? 2 / 3 : 1 / 3)) {
+    if (game.length < game.capacity * 2 / 3) {
       const fork = game.forkForPlanning();
       adjacency.set(fork, neighbors(game));
       const workspace = workspaces.get(game);
       if (workspace) workspaces.set(fork, workspace);
       if (chase.directions.every(d => fork.step(d))) {
-        let budgetLeft = prioritizeGrowth ? 8192 : 2048;
-        for (let meal = 1; (prioritizeGrowth || meal < 6) && budgetLeft > 0; meal++) {
+        let budgetLeft = Math.min(8192, 4 * game.length + budget);
+        while (budgetLeft > 0) {
           const next = fork.food.values().next().value;
           if (!next) break;
           const allowance = Math.min(budgetLeft, 2 * boardDistance(fork, fork.head, next) + 64);
@@ -192,21 +200,11 @@ export function tileRoute(game: Game, prioritizeGrowth = false): Route | undefin
       }
     }
   }
-  if (prioritizeGrowth) {
-    // Alternate arrival headings can preserve the spanning cycle even when
-    // the first shortest path cuts across its required joins.
-    for (const nodes of candidates) {
-      const moves = nodes.slice(1);
-      const chase = { directions: moves.map(n => n.d), points: moves.map(n => n.p) };
-      if (certified(game, chase)) return chase;
-    }
-  }
   let best: Route | undefined;
   for (const phase of phases) {
     const route = completeTileCycle(game, undefined, 0, phase);
     if (route && (!best || route.points.length < best.points.length)) best = route;
   }
-  const distance = boardDistance(game, game.head, target);
   const maxRelease = Math.min(game.length - 2, (best?.points.length ?? Infinity) - 2);
   // The tail will vacate these constraints before the bite. Try both the
   // geometric lower bound and a longer detour, then replay the released prefix.

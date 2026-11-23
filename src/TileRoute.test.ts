@@ -17,10 +17,10 @@ function savedBoard(seed: number, w: number, h: number, wrap: boolean) {
 }
 
 it('completes games using only certified tile routes', () => {
-  for (const growth of [false, true]) for (const wrap of [false, true]) for (const seed of [7, 42, 113]) {
+  for (const wrap of [false, true]) for (const seed of [7, 42, 113]) {
     const game = new Game(seed, 16, 12, wrap);
     while (!game.won) {
-      const route = tileRoute(game, growth);
+      const route = tileRoute(game);
       if (!route?.directions.length) throw Error('Lost the spanning cycle');
       const score = game.score;
       for (const d of route.directions) {

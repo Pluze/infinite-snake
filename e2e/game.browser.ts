@@ -348,6 +348,7 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await step(page);
   await expect(page.locator('#play')).toHaveText('You win! · Play again');
   await expect(page.locator('#growth-chart svg text[x="324"]').last()).toHaveText('1');
+  await expect(page.locator('#growth-chart svg circle')).toHaveAttribute('cx', '270');
   await page.locator('#growth-chart svg circle').hover();
   await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
@@ -375,18 +376,20 @@ test('a paused free camera does not redraw an unchanged board each frame', async
   expect(paints).toBe(0);
 });
 
-test('growth preference replans during autoplay and survives a reload', async ({ page }) => {
+test('autoplay ignores a legacy growth preference', async ({ page }) => {
+  await page.addInitScript(() => {
+    const key = 'snake-torus-settings-v2';
+    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ growth: false }));
+  });
   await page.goto('/');
   await expect(page.locator('#loading')).toBeHidden();
-  await expect(page.locator('#growth')).not.toBeChecked();
+  await expect(page.locator('#growth')).toHaveCount(0);
   await page.locator('#mode-auto').click();
-  await page.locator('#growth').check();
   await page.locator('#play').click();
   await expect.poll(async () => Number(await page.locator('#board').getAttribute('data-steps'))).toBeGreaterThan(0);
   await page.reload();
   await expect(page.locator('#loading')).toBeHidden();
-  await expect(page.locator('#growth')).toBeChecked();
-  await page.locator('#growth').uncheck();
+  await expect(page.locator('#mode-auto')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('movement keys take over focused controls and accelerate straight ahead', async ({ page }) => {

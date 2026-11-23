@@ -2,12 +2,11 @@ import { AutoPlayer } from './AutoPlayer';
 import { Direction, Game, Snapshot } from './Game';
 import { ScoreHistory } from './ScoreHistory';
 
-self.onmessage = ({ data }: MessageEvent<{ state: Snapshot; prefix: Direction[]; growth: boolean }>) => {
-  const { state, prefix, growth } = data;
+self.onmessage = ({ data }: MessageEvent<{ state: Snapshot; prefix: Direction[] }>) => {
+  const { state, prefix } = data;
   const history = new ScoreHistory(state.score);
   history.length = state.steps + 1;
   const game = Game.restore(state, history), bot = new AutoPlayer();
-  bot.prioritizeGrowth = growth;
   const directions: Direction[] = [];
   const limit = Math.min(262144, 2 * game.capacity);
   while (game.score === state.score && directions.length < limit) {
