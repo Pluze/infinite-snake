@@ -29,7 +29,7 @@ The camera starts in free mode. With Follow camera and Adaptive zoom enabled, it
 - **Interface:** the left toolbar shows the title, score, and a compact dropdown containing only New game, Fullscreen, How to play, and Source code. The right control panel contains playback, Manual/Auto, speed, route visibility, follow, and risk assist. Less-used camera and single-step settings are under More options in that same panel. Opening the dropdown pauses play; click outside or press Escape to close it.
 - **Charts stay on the board:** growth at bottom-left and efficiency at bottom-right on desktop. The growth chart shows length on the left axis and length divided by board capacity on the right, reaching 1 at a full board. Mobile keeps the original bottom chart buttons and shows one chart at a time. Touch direction controls remain available during manual play. On mobile, playback stays visible and the Controls button expands the other common controls.
 
-Wraparound board copies alternate jade green and periwinkle in a checkerboard. Solid-wall boards use jade green. The eyes and tapered tail distinguish its ends.
+Each continuous snake in the wraparound view keeps its color from head to tail across seams. Neighboring copies of that snake alternate jade green and periwinkle in a checkerboard. Solid-wall boards use jade green. The eyes and tapered tail distinguish its ends.
 
 The UI is entirely English and respects the system reduced-motion preference.
 

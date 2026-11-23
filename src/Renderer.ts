@@ -5,6 +5,34 @@ import { jade, periwinkle, SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private snakeSprites = new SnakeSprites();
+  // Tile parity of each segment on the continuous, unwrapped snake.
+  private winding = new Uint8Array(0);
+  private windingGame?: Game;
+  private windingEnd = 0;
+  private updateWinding(game: Game) {
+    if (!game.wraparound) {
+      if (this.windingGame) { this.windingGame = undefined; this.winding = new Uint8Array(0); }
+      return;
+    }
+    if (this.windingGame !== game || this.winding.length < game.length) {
+      this.winding = new Uint8Array(2 ** Math.ceil(Math.log2(game.length)));
+      this.windingGame = game;
+      this.windingEnd = game.first;
+    }
+    const start = Math.max(this.windingEnd, game.first);
+    if (start >= game.last) return;
+    // Two-cell axes draw their ambiguous edge inside the board (see toward).
+    let parity = ((game.width > 2 ? Math.floor(game.travel.x / game.width) : 0)
+      + (game.height > 2 ? Math.floor(game.travel.y / game.height) : 0)) & 1;
+    let next = game.head;
+    for (let i = game.last - 1; i >= start; i--) {
+      const p = game.segment(i)!;
+      if (Math.abs(p.x - next.x) > 1 || Math.abs(p.y - next.y) > 1) parity ^= 1;
+      this.winding[i % this.winding.length] = parity;
+      next = p;
+    }
+    this.windingEnd = game.last;
+  }
   private overview = document.createElement('canvas');
   private overviewPattern: CanvasPattern | null = null;
   private overviewGame?: Game;
@@ -113,6 +141,7 @@ export class Renderer {
         this.scale += (target - this.scale) * (1 - Math.exp(-dt * 1.4));
       }
     }
+    this.updateWinding(game);
     const ctx = this.ctx, s = this.scale, w = this.width, h = this.height;
     ctx.fillStyle = game.wraparound ? '#101915' : '#080e0b'; ctx.fillRect(0, 0, w, h);
     if (s < 3 || (game.wraparound && Math.min(game.width, game.height) * s < 8)) {
@@ -228,7 +257,7 @@ export class Renderer {
         : front !== undefined
           ? { kind: 'tail' as const, facing: front }
           : { kind: 'head' as const, facing };
-      const sprite = this.snakeSprites.get(tile, game.dead && !next, alternate);
+      const sprite = this.snakeSprites.get(tile, game.dead && !next, alternate !== (game.wraparound && Boolean(this.winding[index % this.winding.length])));
       // Round shared cell edges identically so fractional camera zoom leaves no gaps.
       const x0 = Math.round(x - s / 2);
       const y0 = Math.round(y - s / 2);
@@ -311,9 +340,13 @@ export class Renderer {
       const stride = Math.max(1, Math.ceil(game.length / 32_768));
       for (let column = 0; column < copies; column++) {
         const offset = column * cols;
-        raster.fillStyle = column === 0 ? jade.fill : periwinkle.fill;
-        for (let i = game.first; i < game.last; i += stride) plot(game.segments.get(i)!, offset);
-        plot(game.head, offset);
+        const segment = (index: number) => {
+          const winding = game.wraparound ? this.winding[index % this.winding.length] : 0;
+          raster.fillStyle = column === winding ? jade.fill : periwinkle.fill;
+          plot(game.segment(index)!, offset);
+        };
+        for (let i = game.first; i < game.last; i += stride) segment(i);
+        segment(game.last - 1);
         // Keep food visible when several logical cells share a raster pixel.
         raster.fillStyle = '#f4b37c';
         for (const food of game.food.values()) plot(food, offset);

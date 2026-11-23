@@ -424,20 +424,27 @@ test('wrap copies alternate snake colors across both seams at detail and overvie
     const canvas = document.createElement('canvas'), renderer = new Renderer(canvas);
     const ctx = canvas.getContext('2d')!;
     const game = new Game(42, 9, 7);
+    for (const d of [0, 0, 0, 0, 3, 3]) {
+      renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
+      if (!game.step(d)) throw Error('Failed to build seam-crossing fixture');
+    }
+    // The same snake now spans x = 8..9 and crosses upward from y = 0 to -1.
     const samples: string[][] = [];
     for (const scale of [16, 2]) {
       renderer.scale = scale;
       renderer.x = -7;
       renderer.y = 7;
       renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
-      samples.push([[-1, 1], [0, 1], [-1, 0], [0, 0]].map(([tx, ty]) => {
-        const x = innerWidth / 2 + (2 + tx * game.width - renderer.x) * scale;
-        const y = innerHeight / 2 + (ty * game.height - renderer.y) * scale;
+      samples.push([[8, 0], [9, 0], [9, -1], [17, 0], [18, 0], [18, -1], [9, 6]].map(([wx, wy]) => {
+        const x = innerWidth / 2 + (wx - renderer.x) * scale;
+        const y = innerHeight / 2 + (wy - renderer.y) * scale;
         return [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3).join(',');
       }));
     }
     return samples;
   });
-  const checker = ['105,202,144', '165,180,232', '165,180,232', '105,202,144'];
-  expect(samples).toEqual([checker, checker]);
+  const green = '105,202,144', purple = '165,180,232';
+  const checker = [green, green, green, purple, purple, purple, purple];
+  // The exact center pixel of a 90-degree bend lies on the sprite outline.
+  expect(samples).toEqual([[green, '53,123,89', green, purple, '93,105,158', purple, purple], checker]);
 });
