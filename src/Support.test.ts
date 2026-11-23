@@ -5,18 +5,18 @@ import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
 describe('chart envelope queries', () => {
-  it('retains growth and efficiency extrema across sparse history and windows', () => {
+  it('retains growth extrema and measures completed meals across window boundaries', () => {
     const scores = Array.from({ length: 2049 }, (_, i) => Math.floor(i / 97) * 10);
-    for (const growth of [false, true]) for (const limit of [0, 1000, 19]) {
-      const points = sampleHistory(ScoreHistory.fromScores(scores), limit, growth, 6, 30);
+    for (const limit of [0, 1000, 19]) {
+      const points = sampleHistory(ScoreHistory.fromScores(scores), limit, true, 6, 30);
       const start = limit ? Math.max(0, scores.length - limit - 1) : 0;
       const width = Math.ceil((scores.length - start) / 30);
-      const value = (score: number, step: number) => growth ? score / 10 + 6 : step ? score / 10 / step * 100 : 0;
+      const value = (score: number) => score / 10 + 6;
       expect(points[0].step).toBe(start);
       expect(points.at(-1)!.step).toBe(scores.length - 1);
       for (let from = start; from < scores.length; from += width) {
         const end = Math.min(scores.length, from + width);
-        const values = scores.slice(from, end).map((score, i) => value(score, from + i));
+        const values = scores.slice(from, end).map(value);
         const selected = points.filter(p => p.step >= from && p.step < end).map(p => p.score);
         expect(selected).toContain(Math.min(...values));
         expect(selected).toContain(Math.max(...values));
@@ -26,7 +26,10 @@ describe('chart envelope queries', () => {
     long.length = 10_000_001;
     long.changes.push([8_000_000, 10]);
     const peak = sampleHistory(long, 0, false, 6).find(point => point.step === 8_000_000);
-    expect(peak?.score).toBeCloseTo(100 / 8_000_000, 12);
+    expect(peak?.score).toBe(8_000_000);
+    expect(sampleHistory(long, 1000, false, 6)).toEqual([]);
+    const bites = ScoreHistory.fromScores([0, 0, 10, 10, 10, 10, 20, 30, 30]);
+    expect(sampleHistory(bites, 3, false, 6)).toEqual([{ step: 6, score: 4 }, { step: 7, score: 1 }]);
     expect(long.changes).toHaveLength(2);
   });
 });

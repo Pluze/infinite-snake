@@ -349,6 +349,9 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await expect(page.locator('#play')).toHaveText('You win! · Play again');
   await expect(page.locator('#growth-chart svg text[x="324"]').last()).toHaveText('1');
   await expect(page.locator('#growth-chart svg circle')).toHaveAttribute('cx', '270');
+  await expect(page.locator('#efficiency-summary')).toHaveText('1 step');
+  await page.locator('#efficiency-chart svg circle').hover();
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toHaveText('Step 1 · 1 step to food');
   await page.locator('#growth-chart svg circle').hover();
   await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
@@ -435,7 +438,7 @@ test('wrap copies alternate snake colors across both seams at detail and overvie
       renderer.x = -7;
       renderer.y = 7;
       renderer.render(game, { directions: [], points: [], safe: true, reason: '' }, false, false, false);
-      samples.push([[8, 0], [9, 0], [9, -1], [17, 0], [18, 0], [18, -1], [9, 6]].map(([wx, wy]) => {
+      samples.push([[8, 0], [9, 0], [9, -1], [17, 0], [18, 0], [18, -1], [9, 6], [18, 6], [0, -8]].map(([wx, wy]) => {
         const x = innerWidth / 2 + (wx - renderer.x) * scale;
         const y = innerHeight / 2 + (wy - renderer.y) * scale;
         return [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3).join(',');
@@ -444,7 +447,8 @@ test('wrap copies alternate snake colors across both seams at detail and overvie
     return samples;
   });
   const green = '105,202,144', purple = '165,180,232';
-  const checker = [green, green, green, purple, purple, purple, purple];
+  const rose = '220,153,186', gold = '220,199,125';
+  const checker = [green, green, green, purple, purple, purple, rose, gold, gold];
   // The exact center pixel of a 90-degree bend lies on the sprite outline.
-  expect(samples).toEqual([[green, '53,123,89', green, purple, '93,105,158', purple, purple], checker]);
+  expect(samples).toEqual([[green, '53,123,89', green, purple, '93,105,158', purple, rose, gold, gold], checker]);
 });

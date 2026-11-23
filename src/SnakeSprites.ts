@@ -1,7 +1,11 @@
 import { Direction, Point, vectors } from './Game';
 
-export const jade = { fill: '#69ca90', outline: '#357b59' };
-export const periwinkle = { fill: '#a5b4e8', outline: '#5d699e' };
+export const snakePalettes = [
+  { fill: '#69ca90', outline: '#357b59' }, // Jade
+  { fill: '#a5b4e8', outline: '#5d699e' }, // Periwinkle
+  { fill: '#dc99ba', outline: '#905978' }, // Dusty rose
+  { fill: '#dcc77d', outline: '#8b7943' }, // Straw gold
+];
 
 const resolution = 16;
 const bodyRadius = .32;
@@ -13,11 +17,11 @@ type Tile =
 export class SnakeSprites {
   private cache = new Map<string, HTMLCanvasElement>();
 
-  get(tile: Tile, dead: boolean, alternate: boolean) {
+  get(tile: Tile, dead: boolean, palette: number) {
     const key = tile.kind === 'body'
       ? `body:${tile.back}:${tile.front}`
       : `${tile.kind}:${tile.facing}:${dead}`;
-    const cacheKey = alternate && !dead ? key + ':alternate' : key;
+    const cacheKey = dead ? key : key + ':' + palette;
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
@@ -27,7 +31,7 @@ export class SnakeSprites {
     const facing = vectors[tile.kind === 'body' ? tile.front : tile.facing];
     const back = tile.kind === 'body' ? vectors[tile.back] : undefined;
     const bend = back && back.x * facing.x + back.y * facing.y === 0;
-    const { fill, outline } = dead ? { fill: '#e39b83', outline: '#9f594c' } : alternate ? periwinkle : jade;
+    const { fill, outline } = dead ? { fill: '#e39b83', outline: '#9f594c' } : snakePalettes[palette];
 
     for (let row = 0; row < resolution; row++) {
       for (let col = 0; col < resolution; col++) {

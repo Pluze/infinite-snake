@@ -1,7 +1,8 @@
 import { Direction, Game, Point, vectors } from './Game';
 import { Cycle } from './TorusCycle';
 import { Plan } from './AutoPlayer';
-import { jade, periwinkle, SnakeSprites, toward } from './SnakeSprites';
+import { snakePalettes, SnakeSprites, toward } from './SnakeSprites';
+const copyIndex = (column: number, row: number) => (column & 1) | ((row & 1) << 1);
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private snakeSprites = new SnakeSprites();
@@ -22,12 +23,13 @@ export class Renderer {
     const start = Math.max(this.windingEnd, game.first);
     if (start >= game.last) return;
     // Two-cell axes draw their ambiguous edge inside the board (see toward).
-    let parity = ((game.width > 2 ? Math.floor(game.travel.x / game.width) : 0)
-      + (game.height > 2 ? Math.floor(game.travel.y / game.height) : 0)) & 1;
+    let parity = copyIndex(game.width > 2 ? Math.floor(game.travel.x / game.width) : 0,
+      game.height > 2 ? Math.floor(game.travel.y / game.height) : 0);
     let next = game.head;
     for (let i = game.last - 1; i >= start; i--) {
       const p = game.segment(i)!;
-      if (Math.abs(p.x - next.x) > 1 || Math.abs(p.y - next.y) > 1) parity ^= 1;
+      if (Math.abs(p.x - next.x) > 1) parity ^= 1;
+      if (Math.abs(p.y - next.y) > 1) parity ^= 2;
       this.winding[i % this.winding.length] = parity;
       next = p;
     }
@@ -179,17 +181,17 @@ export class Renderer {
       ctx.font = '10px monospace'; ctx.fillStyle = '#6a8d60'; ctx.textAlign = 'left';
       for (let x = Math.ceil(left / game.width) * game.width; x <= right; x += game.width) for (let y = Math.ceil(top / game.height) * game.height; y <= bottom; y += game.height) { const p = screen(x, y); ctx.fillText(`WRAP · ${game.width} × ${game.height}`, p.x + 4, p.y + 12); }
     }
-    const copies = (p: Point, draw: (x: number, y: number, alternate: boolean) => void) => {
+    const copies = (p: Point, draw: (x: number, y: number, copy: number) => void) => {
       if (!game.wraparound) {
         if (game.contains(p) && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
           const pos = screen(p.x, p.y);
-          draw(pos.x, pos.y, false);
+          draw(pos.x, pos.y, 0);
         }
         return;
       }
       for (let tx = Math.ceil((left - p.x) / game.width); tx <= Math.floor((right - p.x) / game.width); tx++)
         for (let ty = Math.ceil((top - p.y) / game.height); ty <= Math.floor((bottom - p.y) / game.height); ty++) {
-          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y, ((tx + ty) & 1) === 1);
+          const pos = screen(p.x + tx * game.width, p.y + ty * game.height); draw(pos.x, pos.y, copyIndex(tx, ty));
         }
     };
     const foodPulse = running && !reduced ? (1 + Math.sin(now / 230)) / 2 : .5;
@@ -245,7 +247,7 @@ export class Renderer {
       const target = game.food.values().next().value;
       if (target) copies(target, (x, y) => { ctx.strokeStyle = '#f7c795'; ctx.lineWidth = 1; ctx.strokeRect(x - s * .48, y - s * .48, s * .96, s * .96); });
     }
-    const drawSegment = (index: number, point: Point, x: number, y: number, alternate: boolean) => {
+    const drawSegment = (index: number, point: Point, x: number, y: number, copy: number) => {
       const previous = game.segments.get(index - 1);
       const next = game.segments.get(index + 1);
       const back = previous && toward(point, previous, game.width, game.height);
@@ -257,21 +259,21 @@ export class Renderer {
         : front !== undefined
           ? { kind: 'tail' as const, facing: front }
           : { kind: 'head' as const, facing };
-      const sprite = this.snakeSprites.get(tile, game.dead && !next, alternate !== (game.wraparound && Boolean(this.winding[index % this.winding.length])));
+      const sprite = this.snakeSprites.get(tile, game.dead && !next, copy ^ (game.wraparound ? this.winding[index % this.winding.length] : 0));
       // Round shared cell edges identically so fractional camera zoom leaves no gaps.
       const x0 = Math.round(x - s / 2);
       const y0 = Math.round(y - s / 2);
       ctx.drawImage(sprite, x0, y0, Math.round(x + s / 2) - x0, Math.round(y + s / 2) - y0);
     };
     if (game.length <= visibleCells) {
-      for (const [index, point] of game.segments) copies(point, (x, y, alternate) => drawSegment(index, point, x, y, alternate));
+      for (const [index, point] of game.segments) copies(point, (x, y, copy) => drawSegment(index, point, x, y, copy));
     } else {
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
         const index = game.segmentAt(point);
         if (index === undefined) continue;
         const pos = screen(x, y);
-        drawSegment(index, point, pos.x, pos.y, game.wraparound && ((Math.floor(x / game.width) + Math.floor(y / game.height)) & 1) === 1);
+        drawSegment(index, point, pos.x, pos.y, game.wraparound ? copyIndex(Math.floor(x / game.width), Math.floor(y / game.height)) : 0);
       }
     }
     if (overlay) for (let d = 0; d < 4; d++) {
@@ -296,7 +298,7 @@ export class Renderer {
     const top = this.height / 2 - (this.y + .5) * this.scale;
     if (game.wraparound && width < 1 && height < 1) {
       // Repeated cells below a pixel on both axes are represented by density.
-      ctx.fillStyle = `rgba(135, 191, 188, ${game.length / game.capacity * .45})`;
+      ctx.fillStyle = `rgba(178, 180, 172, ${game.length / game.capacity * .45})`;
       ctx.fillRect(0, 0, this.width, this.height);
       return;
     }
@@ -317,7 +319,7 @@ export class Renderer {
       const raster = tile.getContext('2d')!;
       raster.fillStyle = '#101915';
       raster.fillRect(0, 0, tile.width, tile.height);
-      const plot = (p: Point, offset = 0) => raster.fillRect(offset + Math.floor(p.x * cols / game.width),
+      const plot = (p: Point) => raster.fillRect(Math.floor(p.x * cols / game.width),
         Math.floor(p.y * rows / game.height), 1, 1);
       const path = plan?.path;
       raster.fillStyle = '#466647';
@@ -335,25 +337,25 @@ export class Renderer {
           plot(cycle.point((start + length) % cycle.size));
         }
       }
-      // Build one 2-by-2 repeat. Share the route and food between both palettes.
-      if (game.wraparound) raster.drawImage(tile, 0, 0, cols, rows, cols, 0, cols, rows);
+      // Draw the shared route layer once, then color each continuous snake copy.
+      for (let row = 0; row < copies; row++) for (let col = 0; col < copies; col++) {
+        if (row || col) raster.drawImage(tile, 0, 0, cols, rows, col * cols, row * rows, cols, rows);
+      }
       const stride = Math.max(1, Math.ceil(game.length / 32_768));
-      for (let column = 0; column < copies; column++) {
-        const offset = column * cols;
+      for (let row = 0; row < copies; row++) for (let col = 0; col < copies; col++) {
+        const copy = copyIndex(col, row);
+        raster.save();
+        raster.translate(col * cols, row * rows);
         const segment = (index: number) => {
           const winding = game.wraparound ? this.winding[index % this.winding.length] : 0;
-          raster.fillStyle = column === winding ? jade.fill : periwinkle.fill;
-          plot(game.segment(index)!, offset);
+          raster.fillStyle = snakePalettes[copy ^ winding].fill;
+          plot(game.segment(index)!);
         };
         for (let i = game.first; i < game.last; i += stride) segment(i);
         segment(game.last - 1);
-        // Keep food visible when several logical cells share a raster pixel.
         raster.fillStyle = '#f4b37c';
-        for (const food of game.food.values()) plot(food, offset);
-      }
-      if (game.wraparound) {
-        raster.drawImage(tile, cols, 0, cols, rows, 0, rows, cols, rows);
-        raster.drawImage(tile, 0, 0, cols, rows, cols, rows, cols, rows);
+        for (const food of game.food.values()) plot(food);
+        raster.restore();
       }
       this.overviewPattern = game.wraparound ? ctx.createPattern(tile, 'repeat') : null;
     }

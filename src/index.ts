@@ -1,3 +1,4 @@
+import { mealSteps } from './HistorySampler';
 import './style.css';
 import { Direction, Game, Point, MAX_WORLD_CELLS, validWorldSize } from './Game';
 import { AutoPlayer, Plan } from './AutoPlayer';
@@ -52,7 +53,8 @@ function ui() {
   $('score').textContent = fmt(game.score); $('score').title = `Best score: ${fmt(best)}`;
   $('board').dataset.steps = String(game.steps); $('board').dataset.position = `${fmt(game.head.x)}, ${fmt(game.head.y)}`;
   $('board').setAttribute('aria-label', `Snake board. Score ${game.score}, length ${game.length}, ${game.steps} steps, head at ${game.head.x}, ${game.head.y}.`);
-  $('efficiency-summary').textContent = game.steps ? `${(game.score / 10 / game.steps * 100).toFixed(2)}%` : '—';
+  const lastMeal = game.scores.changes.length > 1 ? mealSteps(game.scores, game.scores.changes.length - 1) : 0;
+  $('efficiency-summary').textContent = lastMeal ? `${fmt(lastMeal)} ${lastMeal === 1 ? 'step' : 'steps'}` : '—';
   $('growth-summary').textContent = `${fmt(game.length)} cells`;
   $('speed-value').textContent = fmt(2 ** speedPower);
   checkbox('speed').max = auto ? '16' : '9'; checkbox('speed').value = String(speedPower);
