@@ -148,7 +148,16 @@ test('draws the route and highlights food past the old preview cutoff', async ({
         renderer.y = game.head.y;
         renderer.render(game, plan, true, false, true);
       }
-      return { edges: edges > 0, foodOutline, cycle: Boolean(plan.path && 'cycle' in plan.path) };
+      const path = plan.path;
+      let endpoint;
+      if (path && 'cycle' in path) endpoint = path.cycle.point((path.cycle.index(game.head) + path.length) % path.cycle.size);
+      else if (path?.suffix) {
+        const { cycle, origin, length } = path.suffix;
+        endpoint = cycle.point((cycle.index(origin) + length) % cycle.size);
+      } else if (path) endpoint = path.points[path.end - 1];
+      return { edges: edges > 0, foodOutline, cycle: Boolean(path && 'cycle' in path),
+        touchesFood: endpoint?.x === food.x && endpoint.y === food.y };
+
     };
 
     const sparse = new Game(42, 4096, 4096, false);
@@ -165,9 +174,9 @@ test('draws the route and highlights food past the old preview cutoff', async ({
     return { sparse: capture(sparse), tiled: capture(dense(256), true), indexed: capture(dense(258), true) };
   });
   expect(result).toEqual({
-    sparse: { edges: true, foodOutline: true, cycle: false },
-    tiled: { edges: true, foodOutline: true, cycle: false },
-    indexed: { edges: true, foodOutline: true, cycle: true },
+    sparse: { edges: true, foodOutline: true, touchesFood: true, cycle: false },
+    tiled: { edges: true, foodOutline: true, touchesFood: true, cycle: false },
+    indexed: { edges: true, foodOutline: true, touchesFood: true, cycle: true },
   });
 });
 
@@ -338,6 +347,9 @@ test('winning offers a quick replay with the same board rules', async ({ page })
   await page.locator('#restart-confirm').click();
   await step(page);
   await expect(page.locator('#play')).toHaveText('You win! · Play again');
+  await expect(page.locator('#growth-chart svg text[x="324"]').last()).toHaveText('1');
+  await page.locator('#growth-chart svg circle').hover();
+  await expect(page.locator('#growth-chart .chart-tooltip')).toContainText('Board fill 1');
   await page.locator('#play').click();
   await expect(page.locator('#play')).toHaveText('Start');
   await expect(page.locator('#score')).toHaveText('0');
@@ -361,4 +373,18 @@ test('a paused free camera does not redraw an unchanged board each frame', async
     return paints;
   });
   expect(paints).toBe(0);
+});
+
+test('growth preference replans during autoplay and survives a reload', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#loading')).toBeHidden();
+  await expect(page.locator('#growth')).not.toBeChecked();
+  await page.locator('#mode-auto').click();
+  await page.locator('#growth').check();
+  await page.locator('#play').click();
+  await expect.poll(async () => Number(await page.locator('#board').getAttribute('data-steps'))).toBeGreaterThan(0);
+  await page.reload();
+  await expect(page.locator('#loading')).toBeHidden();
+  await expect(page.locator('#growth')).toBeChecked();
+  await page.locator('#growth').uncheck();
 });

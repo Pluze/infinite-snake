@@ -17,10 +17,10 @@ function savedBoard(seed: number, w: number, h: number, wrap: boolean) {
 }
 
 it('completes games using only certified tile routes', () => {
-  for (const wrap of [false, true]) for (const seed of [7, 42, 113]) {
+  for (const growth of [false, true]) for (const wrap of [false, true]) for (const seed of [7, 42, 113]) {
     const game = new Game(seed, 16, 12, wrap);
     while (!game.won) {
-      const route = tileRoute(game);
+      const route = tileRoute(game, growth);
       if (!route?.directions.length) throw Error('Lost the spanning cycle');
       const score = game.score;
       for (const d of route.directions) {
@@ -94,20 +94,15 @@ it('resumes the same certified lane at multiple points in a half-full game', () 
   }
 });
 
-it('previews only the moves committed before the next tile search', () => {
+it('shows the full route to the current food across a scheduled replan', () => {
   const game = savedBoard(21, 96, 64, false);
   const bot = new AutoPlayer();
   const { path } = bot.preview(game);
   if (!path || 'cycle' in path) throw Error('Expected an explicit food route');
-  expect(path.end).toBeGreaterThan(0);
-  expect(path.end).toBeLessThan(path.directions.length);
-  for (let i = path.cursor; i < path.end; i++) {
-    const move = bot.nextMove(game);
-    expect(move.direction).toBe(path.directions[i]);
-    if (!move.safe || !game.step(move.direction)) throw Error('Invalid preview');
-    bot.advance(game);
-  }
-  expect(bot.preview(game).directions.length).toBeGreaterThan(0);
+  expect(path.points[path.end - 1]).toEqual(game.food.values().next().value);
+  const fork = game.forkForPlanning();
+  for (let i = path.cursor; i < path.end; i++) expect(fork.step(path.directions[i])).toBe(true);
+  expect(fork.score).toBeGreaterThan(game.score);
 });
 
 it('matches an independent shortest-win search with real steps and food respawns', () => {

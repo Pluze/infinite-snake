@@ -1,4 +1,5 @@
 import { Direction, Game, Point, vectors } from './Game';
+import { Cycle } from './TorusCycle';
 import { Plan } from './AutoPlayer';
 import { SnakeSprites, toward } from './SnakeSprites';
 export class Renderer {
@@ -181,9 +182,8 @@ export class Renderer {
       ctx.lineWidth = Math.max(1, s * .07);
       ctx.setLineDash([s * .15, s * .2]);
       ctx.beginPath();
-      if (path && 'cycle' in path) {
-        const { cycle, length } = path;
-        const start = cycle.index(game.head);
+      const drawCycle = (cycle: Cycle, length: number, origin: Point) => {
+        const start = cycle.index(origin);
         if (length <= visibleCells) {
           for (let offset = 0; offset < length; offset++) {
             const point = cycle.point((start + offset) % cycle.size);
@@ -194,12 +194,16 @@ export class Renderer {
           // Long cycle routes are indexed by cell. Visit only the viewport.
           for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
             const point = game.wraparound ? game.wrap({ x, y }) : { x, y };
-            if (cycle.distance(game.head, point) >= length) continue;
+            if (cycle.distance(origin, point) >= length) continue;
             const pos = screen(x, y);
             edge(pos.x, pos.y, cycle.direction(point));
           }
         }
-      } else if (path) {
+      };
+      if (path && 'cycle' in path) drawCycle(path.cycle, path.length, game.head);
+      else if (path) {
+        if (path.lead) drawCycle(path.lead.cycle, path.lead.length, path.lead.origin);
+        if (path.suffix) drawCycle(path.suffix.cycle, path.suffix.length, path.suffix.origin);
         for (let i = path.cursor; i < path.end; i++) {
           const point = i === 0 ? path.origin : path.points[i - 1];
           copies(point, (x, y) => edge(x, y, path.directions[i]));
@@ -292,6 +296,13 @@ export class Renderer {
         for (let i = 0; i < path.length; i += stride) plot(path.cycle.point((start + i) % path.cycle.size));
       } else if (path) {
         for (let i = path.cursor; i < path.end; i++) plot(path.points[i]);
+        for (const arc of [path.lead, path.suffix]) {
+          if (!arc) continue;
+          const { cycle, length, origin } = arc, start = cycle.index(origin);
+          const stride = Math.max(1, Math.ceil(length / 16384));
+          for (let i = 1; i < length; i += stride) plot(cycle.point((start + i) % cycle.size));
+          plot(cycle.point((start + length) % cycle.size));
+        }
       }
       raster.fillStyle = '#68c994';
       const stride = Math.max(1, Math.ceil(game.length / 32_768));

@@ -43,14 +43,19 @@ try {
       for (const seed of (process.env.SNAKE_BENCH_SEEDS ?? '42,91,999').split(',').map(Number)) {
         const game = start(seed, wraparound, fill);
         const bot = new AutoPlayer();
+        bot.prioritizeGrowth = process.env.SNAKE_BENCH_GROWTH === '1';
         const meals = continuous ? Math.max(0, Math.ceil(game.capacity * Number(process.env.SNAKE_BENCH_UNTIL ?? .3)) - game.length)
           : Math.min(game.capacity - game.length, fill ? 16 : 100);
         let band = 1, bandStart = 0, bandPeakMs = 0, nextMoveMs = 0, escapeMoves = 0, longIntervals = 0;
         const startedAt = performance.now();
         const cpuStart = process.cpuUsage();
+        let directDistance = 0, worstStretch = 0;
         let lastBite = 0, lowerBound = 0, slowMeals = 0, longestMeal = 0, peakMs = 0;
         while (game.score < meals * 10 && game.steps < stepLimit) {
-          if (game.steps === lastBite) lowerBound += boardDistance(game, game.head, game.food.values().next().value);
+          if (game.steps === lastBite) {
+            directDistance = boardDistance(game, game.head, game.food.values().next().value);
+            lowerBound += directDistance;
+          }
           const started = performance.now();
           const move = bot.nextMove(game);
           const tookMs = performance.now() - started;
@@ -65,6 +70,7 @@ try {
           if (game.score > game.scores.at(game.steps - 1)) {
             const distance = game.steps - lastBite;
             lastBite = game.steps;
+            worstStretch = Math.max(worstStretch, distance / directDistance);
             longestMeal = Math.max(longestMeal, distance);
             if (distance > 1024) { slowMeals++; longIntervals++; }
             if (continuous && game.length >= Math.ceil(game.capacity * band / 10)) {
@@ -80,7 +86,7 @@ try {
         const elapsedMs = performance.now() - startedAt;
         const cpu = process.cpuUsage(cpuStart);
         console.log(JSON.stringify({ width: game.width, height: game.height, wraparound, fill, seed, meals, won: game.won,
-          elapsedMs: +elapsedMs.toFixed(2), cpuMs: (cpu.user + cpu.system) / 1000, steps: game.steps, lowerBound,
+          elapsedMs: +elapsedMs.toFixed(2), cpuMs: (cpu.user + cpu.system) / 1000, steps: game.steps, turns: game.turns, lowerBound, worstStretch: +worstStretch.toFixed(2),
           longestMeal, slowMeals, peakMs: Number(peakMs.toFixed(2)), movesPerSecond: Math.round(game.steps * 1000 / elapsedMs) }));
       }
     }

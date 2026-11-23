@@ -206,3 +206,31 @@ At half occupancy on wrapped seed 2026, the food appeared 159 cells away at step
 Use the staged and continuous commands above to reproduce the measurements at each revision. For the additional seeds set `SNAKE_BENCH_FILL=.08,.5,.9,.98` and `SNAKE_BENCH_SEEDS=17,31,73,83,107,171`.
 
 The two staged batches ran sequentially without a concurrent build or browser test. Across all 120 staged runs, process CPU time was 15.65 / 14.95 seconds. An earlier run with concurrent workloads had worst observed single calls of 278.35 / 195.16 ms. The six complete games used 43.15 / 46.14 CPU seconds for 9,090,379 / 9,007,408 moves. On the extra wrapped 90% seeds, the longest wait rose to 5,158 steps even though the batch total fell by 52%. In the Chrome regression for restoring legacy progress and starting a fresh 256 × 128 game, the new page used 2.5 MiB of JavaScript heap after collection. This measurement excludes native browser and graphics allocations.
+
+## Direct routes and future food access
+
+Enable **Prioritize growth** to compare additional certified paths on even boards with both dimensions at least four and up to 65,536 cells. The planner tries both one-turn Manhattan paths and alternative arrival directions. A wrapped board supports four alignments of the tile lattice. When two direct paths admit a full-board cycle, a breadth-first search on each projected body measures the extra distance from the bite to other free cells. Every reachable cell contributes its obstacle distance divided by its geometric distance, minus one. A disconnected free cell incurs a penalty of width plus height. This static-body estimate ranks paths. Separate tail-release checks and spanning-cycle completion certify them. The planner can also replay several seeded food spawns before certifying the resulting body. Its longer search and access estimates trade calculation time for additional route choices.
+
+Each row below compares standard / growth mode on six seeds (42, 91, 999, 7, 113, 2026), 16 foods per seed on a 256 × 256 board. Weighted stretch is total moves divided by the sum of the geometric distances at spawn. Worst stretch is the largest individual meal ratio. Both account for wraparound. Peak is the longest observed planner call in milliseconds on a shared Mac.
+
+| Edges | Initial fill | Steps | Turns | Weighted stretch | Worst stretch | Peak ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Walls | 8% | 88,422 / 80,555 | 2,482 / 2,121 | 5.31 / 4.77 | 88.24 / 98.2 | 23.98 / 24.33 |
+| Walls | 50% | 111,368 / 108,748 | 6,516 / 6,034 | 8.80 / 8.59 | 106.25 / 106.25 | 48.87 / 7.49 |
+| Walls | 90% | 43,564 / 45,270 | 4,552 / 5,150 | 4.25 / 4.39 | 34.4 / 68.89 | 13.13 / 14.35 |
+| Walls | 98% | 19,043 / 19,082 | 1,715 / 1,869 | 2.17 / 2.11 | 73 / 68.33 | 6.54 / 12.79 |
+| Wrap | 8% | 73,273 / 64,737 | 1,579 / 1,251 | 5.79 / 5.09 | 59.06 / 58.82 | 18.06 / 13.79 |
+| Wrap | 50% | 254,116 / 246,904 | 4,912 / 4,436 | 25.31 / 24.14 | 284.33 / 298.33 | 62.44 / 62.3 |
+| Wrap | 90% | 45,758 / 45,758 | 956 / 956 | 6.06 / 6.06 | 59.44 / 59.44 | 45.59 / 52.94 |
+| Wrap | 98% | 25,264 / 25,264 | 544 / 544 | 3.88 / 3.88 | 162.6 / 162.6 | 16.54 / 31.39 |
+
+Fresh games used seeds 42, 91 and 999. Each 32 × 24 game ran to a win. Each 256 × 256 game collected 1,500 foods.
+
+| Size | Edges | Moves (standard / growth) | Turns (standard / growth) |
+| --- | --- | ---: | ---: |
+| 32 × 24 | Walls | 121,243 / 111,402 | 34,958 / 22,202 |
+| 32 × 24 | Wrap | 103,452 / 88,290 | 38,572 / 21,007 |
+| 256 × 256 | Walls | 1,310,208 / 1,314,036 | 30,784 / 29,910 |
+| 256 × 256 | Wrap | 773,937 / 734,501 | 20,546 / 16,997 |
+
+Run the existing staged benchmark twice, setting `SNAKE_BENCH_GROWTH=1` for the second run. Growth mode is opt-in because some walled games take more moves and some individual meals still require a long cycle transition.

@@ -1,5 +1,5 @@
 import './style.css';
-import { Direction, Game, MAX_WORLD_CELLS, validWorldSize } from './Game';
+import { Direction, Game, Point, MAX_WORLD_CELLS, validWorldSize } from './Game';
 import { AutoPlayer, Plan } from './AutoPlayer';
 import { Renderer } from './Renderer';
 import { Persistence } from './Persistence';
@@ -30,10 +30,11 @@ const saver = new ProgressSaver(async () => {
   $('save-status').textContent = `Saved · ${new Date().toLocaleTimeString('en-US', { hour12: false })}`;
 }, () => { $('save-status').textContent = 'Save failed: check browser storage space'; }, 1500);
 function settings() {
-  writeLocal('snake-torus-settings-v2', JSON.stringify({ auto, speedPower, overlay: checkbox('overlay').checked, follow: renderer.follow, autozoom: renderer.autozoom, risk: checkbox('risk').checked }));
+  writeLocal('snake-torus-settings-v2', JSON.stringify({ growth: bot.prioritizeGrowth, auto, speedPower, overlay: checkbox('overlay').checked, follow: renderer.follow, autozoom: renderer.autozoom, risk: checkbox('risk').checked }));
 }
 try {
   const s = JSON.parse(readLocal('snake-torus-settings-v2', '{}'));
+  bot.prioritizeGrowth = checkbox('growth').checked = s.growth === true;
   auto = false; speedPower = Number.isInteger(s.speedPower) ? Math.max(0, Math.min(16, s.speedPower)) : 3;
   checkbox('overlay').checked = s.overlay !== false; checkbox('risk').checked = s.risk !== false;
   renderer.follow = s.follow === true; renderer.autozoom = s.autozoom !== false;
@@ -79,7 +80,7 @@ function toggle() {
   running = !running; message = ''; credit = 0; lastTick = performance.now();
   if (!running) { saver.markDirty(); saver.flush(); } ui();
 }
-function mode(isAuto: boolean) { previewStep = -1; auto = isAuto; if (!auto) speedPower = Math.min(speedPower, 9); pendingDirections = []; bot.reset(); plan = { directions: [], points: [], safe: true, reason: '' }; message = ''; settings(); ui(); }
+function mode(isAuto: boolean) { forecast?.worker?.terminate(); forecast = undefined; previewStep = -1; auto = isAuto; if (!auto) speedPower = Math.min(speedPower, 9); pendingDirections = []; bot.reset(); plan = { directions: [], points: [], safe: true, reason: '' }; message = ''; settings(); ui(); }
 function steer(d: Direction) {
   if (!ready || busy || game.dead || game.won) return;
   if (auto) mode(false);
@@ -113,6 +114,15 @@ $('step').onclick = () => { if (!ready || busy || running || game.dead || game.w
 $('mode-auto').onclick = () => mode(true); $('mode-manual').onclick = () => mode(false);
 checkbox('speed').oninput = () => { speedPower = Number(checkbox('speed').value); credit = 0; settings(); ui(); };
 for (const id of ['overlay', 'risk']) checkbox(id).onchange = () => { message = ''; document.body.classList.remove('warning'); settings(); ui(); };
+checkbox('growth').onchange = () => {
+  bot.prioritizeGrowth = checkbox('growth').checked;
+  bot.reset();
+  previewStep = -1;
+  refreshPlan();
+  drawnState = '';
+  settings();
+  ui();
+};
 checkbox('follow').onchange = () => { renderer.follow = checkbox('follow').checked; renderer.manualUntil = 0; settings(); ui(); };
 checkbox('autozoom').onchange = () => { renderer.autozoom = checkbox('autozoom').checked; settings(); ui(); };
 $('zoom-in').onclick = () => renderer.zoom(1.2); $('zoom-out').onclick = () => renderer.zoom(1 / 1.2);
@@ -229,10 +239,49 @@ function tick() {
 setInterval(tick, 8);
 let previewStep = -1;
 let previewWorld: Game | undefined;
+let forecast: { game: Game; food: Point; start: number; origin: Point; growth: boolean; worker?: Worker;
+  route?: { points: Point[]; directions: Direction[] } } | undefined;
+
+function completePreview() {
+  const food = game.food.values().next().value, path = plan.path;
+  const last = path && !('cycle' in path) ? path.points[path.end - 1] : undefined;
+  const complete = path && ('cycle' in path || path.suffix || (last?.x === food?.x && last?.y === food?.y));
+  if (forecast && (forecast.game !== game || forecast.food !== food || forecast.growth !== bot.prioritizeGrowth || complete || !auto)) {
+    forecast.worker?.terminate(); forecast = undefined;
+  }
+  if (!auto || !food || !plan.safe || !plan.directions.length || complete) return;
+  if (forecast?.route) {
+    const { points, directions } = forecast.route, cursor = game.steps - forecast.start;
+    const expected = cursor ? points[cursor - 1] : forecast.origin;
+    if (expected?.x === game.head.x && expected.y === game.head.y && directions[cursor] === plan.direction) {
+      plan = { ...plan, path: { points, directions, cursor, end: points.length, origin: forecast.origin } };
+      return;
+    }
+    forecast = undefined;
+  }
+  if (forecast && (forecast.worker || forecast.start === game.steps)) return;
+  const worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
+  const job: NonNullable<typeof forecast> = { game, food, start: game.steps, origin: game.head, growth: bot.prioritizeGrowth, worker };
+  forecast = job;
+  worker.onmessage = ({ data }: MessageEvent<Uint8Array>) => {
+    worker.terminate(); job.worker = undefined;
+    if (forecast !== job || !auto || game !== job.game || food !== game.food.values().next().value) return;
+    if (data.length) {
+      let point = job.origin;
+      const directions = Array.from(data) as Direction[];
+      job.route = { directions, points: directions.map(d => point = game.next(point, d)) };
+      previewStep = -1; drawnState = ''; renderer.resetOverview();
+    }
+  };
+  worker.onerror = () => { worker.terminate(); job.worker = undefined; };
+  const prefix = path && !('cycle' in path) ? path.directions.slice(path.cursor, path.end) : plan.directions;
+  worker.postMessage({ state: game.snapshot(), prefix, growth: job.growth });
+}
 function refreshPlan() {
   if (auto && !busy && (previewWorld !== game || previewStep !== game.steps)) {
     previewWorld = game; previewStep = game.steps;
     plan = bot.preview(game);
+    completePreview();
   }
 }
 let drawnWorld: Game | undefined;
