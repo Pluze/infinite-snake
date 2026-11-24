@@ -1,5 +1,5 @@
 import { Game } from './Game';
-import { mealMedian, mealSteps, sampleHistory } from './HistorySampler';
+import { mealMedians, mealSteps, sampleHistory } from './HistorySampler';
 import { formatCount } from './formatCount';
 function fillRatio(length: number, capacity: number) {
   const ratio = length / capacity;
@@ -44,6 +44,8 @@ export class Charts {
       const minX = endX - count + (i ? 1 : 0);
       const points = sampleHistory(game.scores, minX, i === 0, initialLength);
       const svg = panel.querySelector('svg')!;
+      const series = i ? mealMedians(game.scores, minX) : undefined;
+      if (series) panel.querySelector('.median-label')!.textContent = points.length ? `${series.window}-meal median` : 'Median';
       if (!points.length) {
         svg.replaceChildren(); svg.onpointermove = null;
         panel.querySelector('.chart-tooltip')!.textContent = 'No food eaten yet.';
@@ -51,7 +53,7 @@ export class Charts {
       }
       if (i) panel.querySelector('.chart-tooltip')!.textContent = 'X: food eaten · Log Y · Right: steps / (width + height)';
       const maxX = Math.max(minX + 1, endX);
-      const medians = i ? points.map(p => mealMedian(game.scores, p.x)) : [];
+      const medians = series ? points.map(p => series.values[p.x - minX]) : [];
       const peak = Math.max(i === 0 ? 10 : 1, ...points.map(p => p.score), ...medians) * 1.12;
       const maxY = i === 0 ? Math.min(game.capacity, Math.ceil(peak / 2) * 2) : Math.max(2, Math.ceil(peak / 2) * 2);
       const right = 270;
@@ -86,7 +88,7 @@ export class Charts {
           const history = game.scores;
           const bite = Math.min(endX, Math.round(position));
           const interval = mealSteps(history, bite);
-          const median = mealMedian(history, bite);
+          const median = series!.values[bite - minX];
           tooltip.textContent = `Food #${formatCount(bite)} · Step ${formatCount(history.changes[bite][0])} · ${formatCount(interval)} ${interval === 1 ? 'step' : 'steps'} to food · ${multiple(interval)} (width + height) · Median ${median} ${median === 1 ? 'step' : 'steps'} · ${multiple(median)} (width + height)`;
         } else {
           const actual = Math.min(endX, Math.round(position)), score = game.scores.at(actual);

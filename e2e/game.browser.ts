@@ -503,7 +503,7 @@ test('meal chart spaces bites evenly by food count and inspects the matching med
     return svg.querySelector('[data-series="meal-median"]')!.getAttribute('d');
   });
   expect(path).toMatch(/^M34\.00,[\d.]+ L152\.00,[\d.]+ L270\.00,/);
-  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Food #2 · Step 100 · 90 steps to food · 1.07× (width + height) · Median 50 steps · 0.595× (width + height)');
+  await expect(page.locator('#efficiency-chart .chart-tooltip')).toContainText('Food #2 · Step 100 · 90 steps to food · 1.07× (width + height) · Median 90 steps · 1.07× (width + height)');
 });
 
 test('latest percentages use steps for growth and completed bites for meal cost', async ({ page }) => {
@@ -523,11 +523,13 @@ test('latest percentages use steps for growth and completed bites for meal cost'
       for (const id of ids) document.querySelector<HTMLButtonElement>(`#${id} [data-range="${range}"]`)!.click();
       await new Promise(resolve => setTimeout(resolve, 510));
       charts.render(game);
-      results.push(ids.map(id => Array.from(document.querySelectorAll(`#${id} svg text[y="119"]`), tick => tick.textContent)).map(ticks => [ticks[0], ticks.at(-1)]));
+      const axes = ids.map(id => Array.from(document.querySelectorAll(`#${id} svg text[y="119"]`), tick => tick.textContent)).map(ticks => [ticks[0], ticks.at(-1)]);
+      results.push({ axes, median: document.querySelector('.median-label')!.textContent });
     }
     return results;
   });
   for (const [index, percent] of [3, 10, 30, 50, 100].entries()) {
-    expect(windows[index]).toEqual([[String(1000 - percent * 10), '1,000'], [String(101 - percent), '100']]);
+    expect(windows[index].median).toBe(`${Math.max(1, Math.round(percent * 0.15))}-meal median`);
+    expect(windows[index].axes).toEqual([[String(1000 - percent * 10), '1,000'], [String(101 - percent), '100']]);
   }
 });

@@ -1,20 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScoreHistory } from './ScoreHistory';
-import { mealMedian, sampleHistory } from './HistorySampler';
+import { mealMedians, sampleHistory } from './HistorySampler';
 import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
 describe('chart envelope queries', () => {
-  it('slides the median over the latest 30 completed meal intervals', () => {
+  it('uses 15% of visible meals and includes earlier bites at the left edge', () => {
     const history = new ScoreHistory();
+    const intervals = Array.from({ length: 100 }, (_, i) => (i * 19) % 23 + 1);
     let step = 0;
-    for (let interval = 1; interval <= 31; interval++) {
-      step += interval;
-      history.changes.push([step, interval * 10]);
+    intervals.forEach((cost, i) => history.changes.push([step += cost, (i + 1) * 10]));
+    for (const [first, window] of [[1, 15], [51, 8], [91, 2], [98, 1]]) {
+      const series = mealMedians(history, first);
+      expect(series.window).toBe(window);
+      const expected = intervals.slice(first - 1).map((_, offset) => {
+        const end = first + offset;
+        const sorted = intervals.slice(Math.max(0, end - window), end).sort((a, b) => a - b);
+        return (sorted[(sorted.length - 1) >> 1] + sorted[sorted.length >> 1]) / 2;
+      });
+      expect(Array.from(series.values)).toEqual(expected);
     }
-    expect(mealMedian(history, 29)).toBe(15);
-    expect(mealMedian(history, 30)).toBe(15.5);
-    expect(mealMedian(history, 31)).toBe(16.5);
   });
   it('retains growth extrema and measures completed meals across window boundaries', () => {
     const scores = Array.from({ length: 2049 }, (_, i) => Math.floor(i / 97) * 10);
@@ -33,10 +38,6 @@ describe('chart envelope queries', () => {
         expect(selected).toContain(Math.max(...values));
       }
     }
-    const intervals = ScoreHistory.fromScores([0, 0, 10, 10, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
-    expect(mealMedian(intervals, 1)).toBe(2);
-    expect(mealMedian(intervals, 2)).toBe(2.5);
-    expect(mealMedian(intervals, 10)).toBe(1);
     const long = new ScoreHistory();
     long.length = 10_000_001;
     long.changes.push([8_000_000, 10]);
