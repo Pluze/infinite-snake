@@ -3,12 +3,12 @@ import { ScoreHistory } from './ScoreHistory';
 export const mealSteps = (history: ScoreHistory, index: number) =>
   history.changes[index][0] - history.changes[index - 1][0];
 
-const cachedMedians = new WeakMap<ScoreHistory, { first: number; end: number; window: number; values: Float64Array }>();
+const cachedStats = new WeakMap<ScoreHistory, { first: number; end: number; window: number; median: Float64Array; mean: Float64Array; p25: Float64Array; p75: Float64Array }>();
 
-export function mealMedians(history: ScoreHistory, first: number) {
+export function mealStats(history: ScoreHistory, first: number) {
   const end = history.changes.length;
   const window = Math.max(1, Math.round((end - first) * 0.15));
-  const cached = cachedMedians.get(history);
+  const cached = cachedStats.get(history);
   if (cached && cached.first === first && cached.end === end) return cached;
 
   // Include the preceding meals so zooming does not truncate the first median.
@@ -35,18 +35,35 @@ export function mealMedians(history: ScoreHistory, first: number) {
     }
     return costs[rank];
   };
-  const values = new Float64Array(Math.max(0, end - first));
+  const length = Math.max(0, end - first);
+  const median = new Float64Array(length), mean = new Float64Array(length);
+  const p25 = new Float64Array(length), p75 = new Float64Array(length);
+  const quantile = (size: number, fraction: number) => {
+    const position = (size - 1) * fraction;
+    const rank = Math.floor(position) + 1;
+    const lower = select(rank);
+    const weight = position % 1;
+    return weight ? lower + weight * (select(rank + 1) - lower) : lower;
+  };
+  let sum = 0;
   for (let i = start; i < end; i++) {
-    update(mealSteps(history, i), 1);
-    if (i - window >= start) update(mealSteps(history, i - window), -1);
+    const cost = mealSteps(history, i);
+    update(cost, 1);
+    sum += cost;
+    if (i - window >= start) {
+      const expired = mealSteps(history, i - window);
+      update(expired, -1);
+      sum -= expired;
+    }
     if (i < first) continue;
-    const size = Math.min(i, window);
-    const middle = Math.ceil(size / 2);
-    const lower = select(middle);
-    values[i - first] = size % 2 ? lower : (lower + select(middle + 1)) / 2;
+    const size = Math.min(i, window), offset = i - first;
+    mean[offset] = sum / size;
+    median[offset] = quantile(size, 0.5);
+    p25[offset] = quantile(size, 0.25);
+    p75[offset] = quantile(size, 0.75);
   }
-  const result = { first, end, window, values };
-  cachedMedians.set(history, result);
+  const result = { first, end, window, median, mean, p25, p75 };
+  cachedStats.set(history, result);
   return result;
 }
 
@@ -66,23 +83,26 @@ export function sampleHistory(history: ScoreHistory, start: number, growth: bool
   const changes = history.changes;
   const first = Math.max(1, start);
   if (first >= changes.length) return [];
-  const { values } = mealMedians(history, first);
+  const stats = mealStats(history, first);
   const selected = new Set([first, changes.length - 1]);
   const width = Math.ceil((changes.length - first) / buckets);
-  let bucket = -1, low = first, high = first, lowMedian = first, highMedian = first;
-  for (let i = first; i < changes.length; i++) {
-    const current = Math.floor((i - first) / width);
-    if (current !== bucket) {
-      selected.add(low); selected.add(high); selected.add(lowMedian); selected.add(highMedian);
-      low = high = lowMedian = highMedian = i; bucket = current;
+  for (let from = first; from < changes.length; from += width) {
+    const until = Math.min(changes.length, from + width);
+    let low = from, high = from;
+    for (let i = from + 1; i < until; i++) {
+      const cost = mealSteps(history, i);
+      if (cost < mealSteps(history, low)) low = i;
+      if (cost > mealSteps(history, high)) high = i;
     }
-    const steps = mealSteps(history, i);
-    if (steps < mealSteps(history, low)) low = i;
-    if (steps > mealSteps(history, high)) high = i;
-    const median = values[i - first];
-    if (median < values[lowMedian - first]) lowMedian = i;
-    if (median > values[highMedian - first]) highMedian = i;
+    selected.add(low); selected.add(high);
+    for (const values of [stats.mean, stats.median, stats.p25, stats.p75]) {
+      low = high = from;
+      for (let i = from + 1; i < until; i++) {
+        if (values[i - first] < values[low - first]) low = i;
+        if (values[i - first] > values[high - first]) high = i;
+      }
+      selected.add(low); selected.add(high);
+    }
   }
-  selected.add(low); selected.add(high); selected.add(lowMedian); selected.add(highMedian);
   return [...selected].sort((a, b) => a - b).map(i => ({ x: i, score: mealSteps(history, i) }));
 }

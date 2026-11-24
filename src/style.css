@@ -20,3 +20,12 @@ dialog{background:#17231d;color:#d6e7d5;border:1px solid #41583b;border-radius:1
 .legend i.median-key{width:14px;height:2px;background:#96daca;margin-left:5px}
 
 .range-label{align-self:center;margin:0 3px;color:#9eafa3;font-size:11px}
+
+#efficiency-chart .legend{flex-wrap:wrap}
+[data-series="meal-median"]{stroke:#96daca;stroke-width:2}
+[data-series="meal-mean"]{stroke:#f2df9c;stroke-width:1.6;stroke-dasharray:5 2}
+[data-series="meal-p25"]{stroke:#8caff0;stroke-width:1.25}
+[data-series="meal-p75"]{stroke:#dba6db;stroke-width:1.25}
+.legend.orange .mean-key{background:#f2df9c}
+.legend.orange .p25-key{background:#8caff0}
+.legend.orange .p75-key{background:#dba6db}

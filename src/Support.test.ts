@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScoreHistory } from './ScoreHistory';
-import { mealMedians, sampleHistory } from './HistorySampler';
+import { mealStats, sampleHistory } from './HistorySampler';
 import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
@@ -11,14 +11,23 @@ describe('chart envelope queries', () => {
     let step = 0;
     intervals.forEach((cost, i) => history.changes.push([step += cost, (i + 1) * 10]));
     for (const [first, window] of [[1, 15], [51, 8], [91, 2], [98, 1]]) {
-      const series = mealMedians(history, first);
+      const series = mealStats(history, first);
       expect(series.window).toBe(window);
       const expected = intervals.slice(first - 1).map((_, offset) => {
         const end = first + offset;
         const sorted = intervals.slice(Math.max(0, end - window), end).sort((a, b) => a - b);
         return (sorted[(sorted.length - 1) >> 1] + sorted[sorted.length >> 1]) / 2;
       });
-      expect(Array.from(series.values)).toEqual(expected);
+      for (let i = first; i <= intervals.length; i++) {
+        const sorted = intervals.slice(Math.max(0, i - window), i).sort((a, b) => a - b);
+        expect(series.mean[i - first]).toBeCloseTo(sorted.reduce((a, b) => a + b, 0) / sorted.length);
+        for (const [key, q] of [['p25', 0.25], ['p75', 0.75]] as const) {
+          const rank = (sorted.length - 1) * q;
+          const lo = sorted[Math.floor(rank)], hi = sorted[Math.ceil(rank)];
+          expect(series[key][i - first]).toBe(lo + (hi - lo) * (rank % 1));
+        }
+      }
+      expect(Array.from(series.median)).toEqual(expected);
     }
   });
   it('retains growth extrema and measures completed meals across window boundaries', () => {
