@@ -3,16 +3,17 @@ import { ScoreHistory } from './ScoreHistory';
 export const mealSteps = (history: ScoreHistory, index: number) =>
   history.changes[index][0] - history.changes[index - 1][0];
 
+const medianWindow = 30;
 const medianSeries = new WeakMap<ScoreHistory, number[]>();
 
 // Bite events are append-only. Repainting or changing the chart window
-// reads cached medians and only new meals incur a nine-element sort.
+// reads cached medians and only new meals incur a window sort.
 export function mealMedian(history: ScoreHistory, index: number) {
   let series = medianSeries.get(history);
   if (!series) { series = [0]; medianSeries.set(history, series); }
   if (series[index] === undefined) {
     const values: number[] = [];
-    for (let bite = Math.max(1, index - 8); bite <= index; bite++) values.push(mealSteps(history, bite));
+    for (let bite = Math.max(1, index - medianWindow + 1); bite <= index; bite++) values.push(mealSteps(history, bite));
     values.sort((a, b) => a - b);
     const middle = values.length >> 1;
     series[index] = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;

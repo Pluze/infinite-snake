@@ -5,6 +5,17 @@ import { ProgressSaver } from './ProgressSaver';
 import { MemoryMonitor } from './MemoryMonitor';
 
 describe('chart envelope queries', () => {
+  it('slides the median over the latest 30 completed meal intervals', () => {
+    const history = new ScoreHistory();
+    let step = 0;
+    for (let interval = 1; interval <= 31; interval++) {
+      step += interval;
+      history.changes.push([step, interval * 10]);
+    }
+    expect(mealMedian(history, 29)).toBe(15);
+    expect(mealMedian(history, 30)).toBe(15.5);
+    expect(mealMedian(history, 31)).toBe(16.5);
+  });
   it('retains growth extrema and measures completed meals across window boundaries', () => {
     const scores = Array.from({ length: 2049 }, (_, i) => Math.floor(i / 97) * 10);
     for (const limit of [0, 1000, 19]) {
